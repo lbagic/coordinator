@@ -1,0 +1,2 @@
+pr 12 OPEN
+issue 14 OPEN 2026-09-07T10:00:00Z slot key naming

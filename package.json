@@ -1,0 +1,19 @@
+{
+  "name": "coordinator",
+  "version": "4.0.0",
+  "description": "A Claude Code skill: the project's front door. Scopes every ask, keeps the ledger of lanes run in other sessions, writes intent-only prompts, verifies what returns.",
+  "type": "module",
+  "license": "MIT",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lbagic/coordinator"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test lane.test.mjs page.test.mjs",
+    "check": "node --check lane.mjs && node --check page.mjs"
+  }
+}

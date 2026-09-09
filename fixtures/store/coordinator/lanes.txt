@@ -1,0 +1,16 @@
+OK docs-apply-r1 12:36 9a722d1 (first session aaaa1111 exited without commits; second bbbb2222 delivered)
+OK r14-charter-reader 13:08 67be06a 9af6025 f4d4a02
+OK docs-apply-r14 08:10 f9aa2f5 653d7d7
+OK r14-wire 08:32 c46825c 30c505a 20ad67c 48513bb 927b4bd 86e7fe2 7a61f21 0e9be11
+OK docs-apply-r14-wire 09:15 1aa22ff
+OK r17-prompt-aid 09:34 6516573 a19b6e1 ed9e522 57e256f 70b3fb6
+OK phase4-rerun3b 09:54 928f3d9 4f1096a (resumed phase4-rerun3, cccc3333 exited before Start)
+OK docs-apply-rerun3 09:59 66a5af3 a77e4bb 196f852
+OK slot-key-and-floor-site 10:23 644d76a 7d72ac3 ca7cfb7 7013bbf 1415bcb cde6731 (1415bcb also swept r15's staged git mv of factory-report-due.sh, harmless; departures declared: two 422 sites, pool.test.ts fifth test file, six settings.test.ts assertions; D27 amendment drafted at slot-key-and-floor-site/REPORT.md:134)
+OK integration-ideation 10:25 875fce8 28fadd8 (second REPORT after its review round; the amendment re-verified file by file: only integration-ideation/ committed; its first push carried b0bbd7d and 1415bcb as a fast-forward)
+OK r15-reflect-suggest 10:28 b0bbd7d ca4e0c7 (no daemon/src touched; 1415bcb carried its staged git mv of strategies/conditions/factory-report-due.sh; suite 605/605 after a pool re-run, first pass 603 on TrustLockError contention; one mint proven on a throwaway clone, row 116)
+OK darkfactory-compare 10:47 abb8a66 (16 files, all under darkfactory-compare/; clone at ~/scratch/compare/repo 1c6404e ELv2, nothing copied or run)
+OK docs-apply-r15-slotkey-gate 10:57 c594902 efa751a 969c40a 01a0b68 3270a78 (CLAUDE.md + six docs files + lane report only; D28 = the gate at decisions.md:2213; six dated amendments D6/D24/D26×2/D27×2 — the D6 one is a declared departure: F-S5's answer recorded where its question was parked, the built row still attach-self-check's to propose; R60–R68 entered backlog; decisions.md 256 insertions, 0 deletions)
+OK docs-apply-r50 11:34 632761c a560f45 d0fd07f 5ce4d67 (docs/ 7 files + lane report only; D29 at decisions.md:2381 with four amendment stubs D15/D20/D21/D24; PR-8 pass-line note on D28 + spec §7; 10:45 merge-is-a-read in journal/roadmap §7/backlog R15 only; R50 Done on a ruling, R69–R76 entered; its push carried 1dd8226 ffded0b 32196fd from the two build lanes, still unreported)
+OK integration-gate-b 11:52 ffded0b c89532f cce4e35 (daemon/src 9 files incl. new integration.ts, dashboard 8 files, migration 015, integration.test.ts 37 + worktrees.test.ts; departures declared: schemas.ts + projects.ts for POST /api/projects validation; suite 673/670 at cce4e35 with 3 rails/dispatch timing tests green alone; conflicting-pair acceptance 14/14 twice; migration 015 on a pg_dump copy 0 failures; not re-run by the coordinator)
+RUN gate-amendments build

@@ -1,0 +1,21 @@
+TASK scratch-write-grant
+Kind: implement
+
+Ask: Grant workers write access to their own scratch directory and nothing outside it.
+Why now: Workers cannot leave notes for the next lane without a writable scratch path.
+Done when: A worker writes under its scratch directory, a write outside it is refused, and a test pins both.
+Fences: Own worktree under .claude/worktrees/ from origin/main; the permission layer and its tests only.
+Pointers: The permission constants and the settings writer; the existing permission tests.
+
+Protocol (implement): deliver the way the Fences say this repo works: a worktree and a PR babysat to CI green with every review-bot thread answered, or commits on main with the issue number in the subject; the Fences name the base and the route. Do your own recon; one concern per PR or commit; checks scoped to the diff, run by you, their evidence quoted. You never merge and never push: that is the user's.
+Instructions for you arrive headed `TO scratch-write-grant`; one headed `TO` another name is not yours: say so and stop. Anything outside the Fences is a stop and a question, never a guess.
+
+prompt-*.txt and coordinator/ are never committed. Pointers are leads to read, not facts: verify before building on them.
+
+Your last message, headed exactly as shown:
+REPORT scratch-write-grant
+what: what changed, where it pivoted and why, what it caught and amended along the way
+commits: <hash> <subject>, one per line, or none
+pr: <url>, or none
+checks: <check>: PASS|FAIL, <evidence>
+open: findings not fixed, departures from the ask, questions only the user can answer

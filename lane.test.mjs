@@ -1,0 +1,980 @@
+import { test, after } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
+import { exited, launchBlock, EXIT_GRACE_MS, promptField, promptFaults, buildPrompt, deltaLine, latestTime, GOALS_TEMPLATE, analyze, findPrompt, nameOf, ctxTokens, windowFromModel, modelFromArgv, argsRe, render, newer, parseBoardLines, parseItem, foldStore, readStore, boardRows, nextId, mintItem, slugOf, isCoordinatorSession, question, askLine, boardData, labelFaults, parseNotify, NotifyTail, renderNotify, parseGithub, githubLine, reportPr, effortFaults, parseFields, protocolOf, setHeaderKey, scoutPrompt, HOOK_JSON, githubRefs, syncGithub, whoRows, relayText, FIELD_MAX, LANE_KINDS, fenceTokens, fenceOverlap } from './lane.mjs';
+
+process.env.TZ = 'UTC';
+
+const NAME = 'commit-when-green';
+const PROMPT = `TASK ${NAME}\nYou commit when CI is green.\nWrite scope: none.\n\nYour last message is the REPORT block.`;
+
+let n = 0;
+const rec = (type, content, extra = {}) => ({ type, sessionId: 's1', timestamp: `2026-09-05T00:00:${String(n++).padStart(2, '0')}Z`, message: { content }, ...extra });
+const user = (text, extra = {}) => rec('user', text, extra);
+const human = (text, extra = {}) => user(text, { origin: { kind: 'human' }, ...extra });
+const toolResult = (text) => rec('user', [{ type: 'tool_result', tool_use_id: 'x', content: text }]);
+const assistant = (text, stop = 'tool_use', extra = {}) => ({ ...rec('assistant', [{ type: 'text', text }], extra), message: { content: [{ type: 'text', text }], stop_reason: stop } });
+const write = (text) => rec('assistant', [{ type: 'tool_use', name: 'Write', input: { file_path: `prompt-${NAME}.txt`, content: text } }]);
+const slash = (args) => human(`<command-message>do</command-message>\n<command-name>/do</command-name>\n<command-args>${args}</command-args>`);
+
+// store fixtures
+const item = (file, text) => ({ file, text });
+const store = (files, lanesText = '', closed = [], githubText = '') => foldStore(files, lanesText, closed, githubText);
+const T = (hm, day = '2026-09-05') => `${day}T${hm}:00Z`;
+const NOW = Date.parse('2026-09-05T08:00:00Z');
+const lane = (name, status, extra = {}) => ({ name, status, session: `${name}-session-id`, peer: null, session_open: false, mtime: NOW - 5000, ...extra });
+const rows = (results, st, opts = {}) => boardRows(results, st, { now: NOW, ...opts });
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+// Subprocess tests run with an empty home so the real session registry, transcripts and settings never leak in.
+const HERMETIC_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-home-'));
+const HERMETIC = { ...process.env, HOME: HERMETIC_HOME, CLAUDE_CODE_SESSION_ID: '' };
+after(() => fs.rmSync(HERMETIC_HOME, { recursive: true, force: true }));
+
+test('name is the basename between prompt- and .txt', () => {
+  assert.equal(nameOf('/repo/prompt-docs-apply.txt'), 'docs-apply');
+  assert.equal(nameOf('coordinator-handoff.txt'), null);
+  assert.equal(nameOf('prompt-.txt'), null);
+});
+
+test('a pasted prompt adopts; the writer, a cat, a notification, a peer, a skill expansion, a sidechain never do', () => {
+  assert.equal(findPrompt([human(PROMPT)], NAME), 0);
+  assert.equal(findPrompt([user(PROMPT)], NAME), 0);
+  assert.equal(findPrompt([write(PROMPT), assistant('written')], NAME), -1);
+  assert.equal(findPrompt([toolResult(PROMPT)], NAME), -1);
+  assert.equal(findPrompt([user(PROMPT, { origin: { kind: 'task-notification' } })], NAME), -1);
+  assert.equal(findPrompt([user(PROMPT, { origin: { kind: 'peer' } })], NAME), -1);
+  assert.equal(findPrompt([user(PROMPT, { isMeta: true })], NAME), -1);
+  assert.equal(findPrompt([user(PROMPT, { isSidechain: true })], NAME), -1);
+});
+
+test('a prompt pasted as a slash command argument adopts', () => {
+  assert.equal(findPrompt([slash(PROMPT)], NAME), 0);
+  assert.equal(findPrompt([slash(`TASK probe-${NAME}\nbody`)], NAME), -1);
+});
+
+test('a slash invocation adopts only once the session has read the file', () => {
+  assert.equal(findPrompt([slash(`prompt-${NAME}.txt`)], NAME), -1);
+  assert.equal(findPrompt([slash(`prompt-${NAME}.txt`), toolResult(PROMPT)], NAME), 0);
+  assert.equal(findPrompt([slash(`run prompt-${NAME}.txt now`), assistant('reading'), toolResult(PROMPT)], NAME), 0);
+});
+
+test('a bare typed message naming the prompt file adopts once the session has read it', () => {
+  assert.equal(findPrompt([human(`follow prompt-${NAME}.txt`)], NAME), -1);
+  assert.equal(findPrompt([human(`follow prompt-${NAME}.txt`), toolResult(PROMPT)], NAME), 0);
+  assert.equal(findPrompt([human(`follow prompt-${NAME}.txt`), assistant('reading'), toolResult(PROMPT)], NAME), 0);
+  assert.equal(findPrompt([human(`follow prompt-probe-${NAME}.txt`), toolResult(PROMPT)], NAME), -1);
+  assert.equal(findPrompt([human(`follow prompt-${NAME}.txt.bak`), toolResult(PROMPT)], NAME), -1);
+  assert.equal(findPrompt([human(`follow prompt-${NAME}.txt.`), toolResult(PROMPT)], NAME), 0);
+  assert.equal(argsRe(NAME).test(`prompt-${NAME}.txt.bak`), false);
+  assert.equal(argsRe(NAME).test(`prompt-${NAME}.txt.`), true);
+});
+
+test('a bare typed message naming another prompt file ends the lane, like a slash invocation', () => {
+  const closes = assistant(`REPORT ${NAME}\nwhat: done`, 'end_turn');
+  assert.equal(analyze([human(PROMPT), closes], NAME).status, 'finished');
+  assert.equal(analyze([human(PROMPT), human('now follow prompt-other-lane.txt'), closes], NAME).status, 'in_progress');
+  assert.equal(analyze([human(PROMPT), human(`re-read prompt-${NAME}.txt`), closes], NAME).status, 'finished');
+});
+
+test('the notify log parses one JSON object per line and skips what it cannot read', () => {
+  const good = '{"at":"2026-09-08T16:51:08Z","session_id":"abcdef0123","cwd":"/repo","message":"Claude needs your permission to use Bash"}';
+  assert.deepEqual(parseNotify(`${good}\n`).map((n) => n.session_id), ['abcdef0123']);
+  assert.deepEqual(parseNotify(`\n${good}\nnot json\n{"a":1}\n[]\n`).length, 1);
+  assert.deepEqual(parseNotify(''), []);
+});
+
+test('a notify line names its lane when one holds the session, else its directory', () => {
+  const n = { at: '2026-09-08T16:51:08Z', session_id: 'abcdef0123456', cwd: '/w/nightshift', message: 'needs\n  permission' };
+  assert.equal(renderNotify(n, 'red-conflict-pick'), 'red-conflict-pick: notify  session abcdef01  2026-09-08 16:51:08  needs permission');
+  assert.equal(renderNotify(n, null), 'nightshift: notify  session abcdef01  2026-09-08 16:51:08  needs permission');
+  assert.equal(renderNotify({ cwd: '/w/nightshift' }, null), 'nightshift: notify  session ?  ?  wants the user');
+});
+
+test('the notify tail arms on its first read, then returns only what was appended', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'notify-'));
+  const file = path.join(dir, 'lane-notify.log');
+  const line = (id) => `{"at":"2026-09-08T16:51:08Z","session_id":"${id}","cwd":"/repo","message":"m"}\n`;
+  const tail = new NotifyTail(file);
+
+  assert.deepEqual(tail.read(), []);              // no file yet
+  fs.writeFileSync(file, line('one'));
+  assert.deepEqual(tail.read().map((n) => n.session_id), ['one']);
+  assert.deepEqual(tail.read(), []);
+  fs.appendFileSync(file, line('two') + line('three'));
+  assert.deepEqual(tail.read().map((n) => n.session_id), ['two', 'three']);
+
+  const half = '{"session_id":"four","cwd":"/repo"';
+  fs.appendFileSync(file, half);
+  assert.deepEqual(tail.read(), []);              // no newline: left for later
+  fs.appendFileSync(file, ',"message":"m"}\n');
+  assert.deepEqual(tail.read().map((n) => n.session_id), ['four']);
+
+  fs.writeFileSync(file, line('five'));           // truncated: read from zero
+  assert.deepEqual(tail.read().map((n) => n.session_id), ['five']);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('a notify tail armed on an existing log never replays its backlog', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'notify-'));
+  const file = path.join(dir, 'lane-notify.log');
+  fs.writeFileSync(file, '{"session_id":"old","cwd":"/repo","message":"m"}\n');
+  const tail = new NotifyTail(file);
+  assert.deepEqual(tail.read(), []);
+  fs.appendFileSync(file, '{"session_id":"new","cwd":"/repo","message":"m"}\n');
+  assert.deepEqual(tail.read().map((n) => n.session_id), ['new']);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('lane names are matched whole, not as substrings', () => {
+  assert.equal(argsRe(NAME).test(`<command-args>prompt-probe-${NAME}.txt</command-args>`), false);
+  assert.equal(argsRe(NAME).test(`<command-args>prompt-${NAME}.txt.bak</command-args>`), false);
+  assert.equal(findPrompt([human(`TASK probe-${NAME}\nbody`)], NAME), -1);
+  assert.equal(findPrompt([human(`TASK ${NAME} extra\nbody`)], NAME), -1);
+});
+
+test('a session that ran /coordinator never adopts, even after reading the file', () => {
+  const coord = human(`<command-name>/coordinator</command-name>\n<command-args>- prompt-${NAME}.txt running</command-args>`);
+  assert.equal(isCoordinatorSession([coord]), true);
+  assert.equal(findPrompt([coord, toolResult(PROMPT), assistant(`REPORT ${NAME}\nwhat: echoed`)], NAME), -1);
+  assert.equal(isCoordinatorSession([human('<command-name>/coordinator-x</command-name>')]), false);
+});
+
+test('the last adopting record wins', () => {
+  const recs = [human(PROMPT), assistant(`REPORT ${NAME}\nwhat: first run`, 'end_turn'), human(PROMPT), assistant('retrying')];
+  assert.equal(findPrompt(recs, NAME), 2);
+  assert.equal(analyze(recs, NAME).status, 'in_progress');
+});
+
+test('REPORT closes only as an exact line; the last block is the report, taken from its REPORT line', () => {
+  const recs = [
+    human(PROMPT),
+    assistant(`I will end with REPORT ${NAME} as instructed.`),
+    assistant('REPORT written (503 lines)'),
+    assistant(`Done.\n  REPORT ${NAME}\nwhat: committed\ncommits: abc123 fix`, 'end_turn'),
+  ];
+  const r = analyze(recs, NAME);
+  assert.equal(r.status, 'finished');
+  assert.equal(r.report, `REPORT ${NAME}\nwhat: committed\ncommits: abc123 fix`);
+  assert.equal(r.turn_index, r.close_index);
+});
+
+test('a turn that ends after the report is continued; a tool stop, a split response, a later REPORT, or another lane is not', () => {
+  const recs = [human(PROMPT), assistant(`REPORT ${NAME}\nwhat: done`, 'end_turn'), human('thanks, one more thing'), assistant('sure', 'end_turn')];
+  const r = analyze(recs, NAME);
+  assert.equal(r.status, 'continued');
+  assert.equal(r.close_index, 1);
+  assert.equal(r.turn_index, 3);
+  assert.equal(r.tail, 'sure');
+  assert.match(render({ ...r, name: NAME, worker_ctx: '10K/1M' }), /^commit-when-green: continued  session s1  turn ended .* after report .*\n  --- last message ---\n  sure\n  ---$/);
+  const working = analyze([...recs.slice(0, 3), assistant('on it', 'tool_use')], NAME);
+  assert.equal(working.status, 'finished');
+  assert.equal(working.turn_index, working.close_index);
+  const split = analyze([...recs.slice(0, 2), assistant('Let me know if anything is unclear.', 'end_turn')], NAME);
+  assert.equal(split.status, 'finished');
+  const again = analyze([...recs, human('redo'), assistant(`REPORT ${NAME}\nwhat: v2`, 'end_turn')], NAME);
+  assert.equal(again.status, 'finished');
+  assert.equal(again.close_index, 5);
+  assert.equal(again.report, `REPORT ${NAME}\nwhat: v2`);
+  const other = analyze([...recs.slice(0, 2), human('TASK other-lane\nbody'), assistant('Which branch?', 'end_turn')], NAME);
+  assert.equal(other.status, 'finished');
+  const viaSlash = analyze([...recs.slice(0, 2), slash('prompt-other-lane.txt'), toolResult('TASK other-lane\nbody'), assistant('Which branch?', 'end_turn')], NAME);
+  assert.equal(viaSlash.status, 'finished');
+});
+
+test('a tool result after the report is not a turn boundary; a peer message is', () => {
+  const base = [human(PROMPT), assistant(`REPORT ${NAME}\nwhat: done`, 'end_turn')];
+  const hooked = analyze([...base, toolResult('hook output'), assistant('noted', 'end_turn')], NAME);
+  assert.equal(hooked.status, 'finished');
+  assert.equal(hooked.turn_index, hooked.close_index);
+  assert.equal(analyze([...base, user('a peer says hi', { origin: { kind: 'peer' } }), assistant('ok', 'end_turn')], NAME).status, 'continued');
+});
+
+test('the ask line is the last question outside a code fence, read from the whole message', () => {
+  assert.equal(question('```\nselect 1?\n```\nDone.'), null);
+  assert.equal(askLine('```\nselect 1?\n```\nDone.'), 'Done.');
+  assert.equal(askLine('```\ncode\n```'), '');
+  const fenced = analyze([human(PROMPT), assistant('```\nselect 1?\n```\nDone.', 'end_turn')], NAME);
+  assert.equal(fenced.status, 'stopped');
+  assert.equal(fenced.asked, false);
+  assert.equal(fenced.ask, 'Done.');
+  const long = analyze([human(PROMPT), assistant(`\`\`\`\n${'x'.repeat(700)}\n\`\`\`\nWhich of these should I keep?`, 'end_turn')], NAME);
+  assert.equal(long.asked, true);
+  assert.equal(long.ask, 'Which of these should I keep?');
+  const capped = analyze([human(PROMPT), assistant(`${'x'.repeat(200)}?`, 'end_turn')], NAME);
+  assert.equal(capped.ask, `${'x'.repeat(119)}…`);
+  const chat = analyze([human(PROMPT), assistant(`REPORT ${NAME}\nwhat: done`, 'end_turn'), human('more'), assistant('I also fixed lint.', 'end_turn')], NAME);
+  assert.equal(chat.status, 'continued');
+  assert.equal(chat.asked, false);
+  assert.equal(chat.ask, 'I also fixed lint.');
+});
+
+test('between two adopting transcripts the later prompt wins; on a tie the newer file', () => {
+  const at = (prompt_at, mtime) => ({ prompt_at, mtime });
+  assert.equal(newer(at('2026-09-05T01:00:00Z', 1), at('2026-09-05T00:00:00Z', 9)), true);
+  assert.equal(newer(at('2026-09-05T00:00:00Z', 9), at('2026-09-05T01:00:00Z', 1)), false);
+  assert.equal(newer(at('2026-09-05T00:00:00Z', 9), at('2026-09-05T00:00:00Z', 1)), true);
+  assert.equal(newer(at('2026-09-05T00:00:00Z', 1), at('2026-09-05T00:00:00Z', 9)), false);
+});
+
+// ---------- the store ----------
+
+test('lanes.txt lines: tag first and normalised; OK and RUN name a lane; anything else does not; an indented line continues the one above', () => {
+  const lines = parseBoardLines('ok: 09-a 07:10 4f2a1c\n  and more\nRUN perf do\nHOLD r13 until Stop is pressed\n\nOK\n');
+  assert.deepEqual(
+    lines.map((l) => [l.tag, l.name, l.rest]),
+    [
+      ['OK', '09-a', '07:10 4f2a1c and more'],
+      ['RUN', 'perf', 'do'],
+      ['HOLD', null, 'r13 until Stop is pressed'],
+      ['OK', null, ''],
+    ],
+  );
+});
+
+test('an item is its filename id, line-1 kind and headline, header keys, then a body the board never reads', () => {
+  const it = parseItem('12-attach-self-check.md', 'LANE attach-self-check F-S5 (a): one attach per worker\nafter: gate-amendments scratch-write-grant\nsource: F-S5\n\nbody\nmore body\n');
+  assert.deepEqual([it.id, it.kind, it.name, it.head, it.after, it.source, it.body], [12, 'LANE', 'attach-self-check', 'F-S5 (a): one attach per worker', ['gate-amendments', 'scratch-write-grant'], 'F-S5', 'body\nmore body']);
+  assert.deepEqual(it.bad, []);
+  const plain = parseItem('/repo/coordinator/8-q.md', 'DECIDE ship it?\nblocks: x y\n');
+  assert.deepEqual([plain.id, plain.name, plain.head, plain.blocks, plain.body], [8, null, 'ship it?', ['x', 'y'], '']);
+  assert.match(parseItem('notes.md', 'NOTE n\n').bad[0], /not <id>-<slug>\.md/);
+});
+
+test('a header line that is not a known key is a fault, never prose; the body starts at the first blank line', () => {
+  assert.match(parseItem('21-x.md', 'NOTE n\nblock: y\n\nbody').bad[0], /#21 header line not a known key: 'block: y'/);
+  const noBlank = parseItem('21-x.md', 'NOTE n\nfirst body line without a blank\n');
+  assert.match(noBlank.bad[0], /not a known key/);
+  assert.equal(noBlank.body, '');
+});
+
+test('until: is `ok <lane>`, `prompt <lane>`, `merged <n>` or `closed <n>`; anything else is a fault', () => {
+  assert.deepEqual(parseItem('1-a.md', 'NOTE n\nuntil: ok docs-apply-r51\n').until, { kind: 'ok', lane: 'docs-apply-r51' });
+  assert.deepEqual(parseItem('1-a.md', 'NOTE n\nuntil:  prompt   x\n').until, { kind: 'prompt', lane: 'x' });
+  assert.deepEqual(parseItem('1-a.md', 'STEP n\nuntil: merged #10667\n').until, { kind: 'merged', n: 10667 });
+  assert.deepEqual(parseItem('1-a.md', 'NOTE n\nuntil: closed 10649\n').until, { kind: 'closed', n: 10649 });
+  assert.match(parseItem('1-a.md', 'NOTE n\nuntil: when it reports\n').bad[0], /#1 until: 'when it reports' is not 'ok <lane>', 'prompt <lane>', 'merged <n>' or 'closed <n>'/);
+});
+
+test('an EFFORT carries size, path, lanes and on; each is checked; no other kind carries size, path or lanes', () => {
+  const it = parseItem('16-slot.md', 'EFFORT slot-key M slot key naming\nsize: M\npath: research implement\nlanes: research=r14 implement=r14-wire\non: issue 14\n\ncard\n');
+  assert.deepEqual(it.bad, []);
+  assert.equal(it.name, 'slot-key');
+  assert.equal(it.head, 'M slot key naming');
+  assert.equal(it.size, 'M');
+  assert.deepEqual(it.path, ['research', 'implement']);
+  assert.deepEqual(it.lanes, { research: 'r14', implement: 'r14-wire' });
+  assert.deepEqual(it.on, { type: 'issue', n: 14 });
+  assert.deepEqual(parseItem('1-a.md', 'STEP merge it\non: pr #12\n').on, { type: 'pr', n: 12 });
+  const bad = parseItem('26-x.md', 'EFFORT x an effort\nsize: XL\npath: research build\nlanes: prototype=p implement-x\non: ticket 5\n').bad;
+  for (const re of [/size: 'XL' is not S, M or L/, /path names 'build'/, /lanes: 'implement-x' is not <kind>=<lane>/, /on: 'ticket 5' is not 'pr <n>' or 'issue <n>'/, /lanes: prototype is not on the path/]) assert.ok(bad.some((b) => re.test(b)), String(re));
+  assert.match(parseItem('27-n.md', 'NOTE a note\nsize: S\n').bad[0], /size: only an EFFORT carries it/);
+  assert.match(parseItem('28-n.md', 'EFFORT\n').bad[0], /#28 no name/);
+});
+
+test('github.txt is one line per number, pr|issue <n> STATE [time] [title]; a line that is not is a fault, never a state', () => {
+  const g = parseGithub('pr 10667 MERGED 2026-09-09T05:34:29Z feat(web): show it\nissue 14 OPEN\n\nissue 15 CLOSED 2026-09-08T10:00:00Z\npr 12 DONE\nnonsense\n');
+  assert.deepEqual([...g.states.keys()], [10667, 14, 15]);
+  assert.deepEqual(g.states.get(10667), { type: 'pr', n: 10667, state: 'MERGED', at: '2026-09-09T05:34:29Z', title: 'feat(web): show it' });
+  assert.deepEqual(g.states.get(14), { type: 'issue', n: 14, state: 'OPEN', at: null, title: '' });
+  assert.deepEqual(g.bad, ['pr 12 DONE', 'nonsense']);
+  assert.equal(githubLine(g.states.get(10667)), 'pr 10667 MERGED 2026-09-09T05:34:29Z feat(web): show it');
+  assert.equal(githubLine(g.states.get(14)), 'issue 14 OPEN');
+  assert.deepEqual(parseGithub('issue 14 OPEN slot key naming\n').states.get(14), { type: 'issue', n: 14, state: 'OPEN', at: null, title: 'slot key naming' }, 'a title never reads as a time');
+  const st = store([item('1-n.md', 'NOTE n\n')], '', [], 'pr 12 DONE\n');
+  assert.equal(rows([], st)[0], "BAD     github.txt: 'pr 12 DONE' is not pr|issue <n> OPEN|CLOSED|MERGED <time> <title>");
+});
+
+test('a draft label that starts like one of the five but is not it is refused, so no text folds into the field above', () => {
+  assert.deepEqual(labelFaults('# draft\n\nAsk: a\nWhy: b\nDone when: c\nFence: d\nPointer: e\n'), ["--from: 'Why:' is not 'Why now:'", "--from: 'Fence:' is not 'Fences:'", "--from: 'Pointer:' is not 'Pointers:'"]);
+  assert.deepEqual(labelFaults('Ask: a\nWhy now: b\nDone when: c\nFences: d\nPointers: e\nNote: fine\nAsk the team: not a label\n'), []);
+});
+
+test('the pr: line of a report names the PR by url or number, or none', () => {
+  assert.equal(reportPr('REPORT x\nwhat: y\npr: https://github.com/o/r/pull/10717\nchecks: ok'), 10717);
+  assert.equal(reportPr('REPORT x\npr: PR #42 open'), 42);
+  assert.equal(reportPr('REPORT x\npr: none'), null);
+  assert.equal(reportPr('REPORT x\nwhat: no pr line'), null);
+});
+
+test('an EFFORT row is its next act: scout, rule, write the next prompt, the lane state, the unmerged PR, the close-out; done goes to the file row', () => {
+  const ef = (keys, extra = '') => item('9-ef.md', `EFFORT ef the effort\n${keys}\n${extra}`);
+  const at = (results, files, lanes = '', gh = '') => rows(results, store(files, lanes, [], gh)).filter((r) => r.startsWith('EFFORT') || r.startsWith('MINE    file:'));
+  assert.deepEqual(at([], [ef('source: user')]), ['EFFORT  ef  scoping: scout, then the card  #9']);
+  assert.deepEqual(at([], [ef('size: M')]), ['EFFORT  ef M  rule the card  #9']);
+  assert.deepEqual(at([], [ef('size: M\npath: research implement')]), ['EFFORT  ef M  write prompt research  #9']);
+  const withLane = 'size: M\npath: research implement\nlanes: research=res';
+  assert.deepEqual(at([lane('res', 'not_found')], [ef(withLane)]), ['EFFORT  ef M  res (research) run it  #9']);
+  assert.deepEqual(at([lane('res', 'not_found')], [ef(withLane), item('3-h.md', 'STEP wait\nblocks: res\n')]), ['EFFORT  ef M  res (research) held: #3  #9']);
+  assert.deepEqual(at([lane('res', 'in_progress', { prompt_at: T('08:00') })], [ef(withLane)]), ['EFFORT  ef M  res (research) live  #9']);
+  assert.deepEqual(at([lane('res', 'stopped', { ask: 'which?', asked: true })], [ef(withLane)]), ['EFFORT  ef M  res (research) answer it  #9']);
+  assert.deepEqual(at([lane('res', 'exited')], [ef(withLane)]), ['EFFORT  ef M  res (research) exited, re-issue  #9']);
+  assert.deepEqual(at([lane('res', 'finished', { closed_at: T('08:10'), report: 'REPORT res\npr: none' })], [ef(withLane)]), ['EFFORT  ef M  res (research) verify  #9']);
+  const done = lane('res', 'finished', { closed_at: T('08:10'), report: 'REPORT res\npr: none' });
+  assert.deepEqual(at([done], [ef(withLane)], 'OK res 08:10 read'), ['EFFORT  ef M  write prompt implement  #9']);
+  const both = `${withLane} implement=imp`;
+  const imp = lane('imp', 'finished', { closed_at: T('09:00'), report: 'REPORT imp\npr: https://github.com/o/r/pull/12' });
+  assert.deepEqual(at([done, imp], [ef(both)], 'OK res 08:10 read\nOK imp 09:00 abc'), ['EFFORT  ef M  imp (implement) PR #12 open, merge is yours  #9']);
+  assert.deepEqual(at([done, imp], [ef(both)], 'OK res 08:10 read\nOK imp 09:00 abc', 'pr 12 CLOSED'), ['EFFORT  ef M  imp (implement) PR #12 closed, merge is yours  #9']);
+  assert.deepEqual(at([done, imp], [ef(`${both}\non: issue 14`)], 'OK res 08:10 read\nOK imp 09:00 abc', 'pr 12 MERGED\nissue 14 OPEN'), ['EFFORT  ef M  close out #14: resolution comment, close, gist line  #9']);
+  assert.deepEqual(at([done, imp], [ef(`${both}\non: issue 14`)], 'OK res 08:10 read\nOK imp 09:00 abc', 'pr 12 MERGED\nissue 14 CLOSED'), ['MINE    file: #9']);
+  assert.deepEqual(at([done, imp], [ef(both)], 'OK res 08:10 read\nOK imp 09:00 abc', 'pr 12 MERGED'), ['MINE    file: #9']);
+  const unknown = rows([], store([ef(withLane)]));
+  assert.match(unknown[0], /#9 names unknown lane 'res'/, 'a lane the ledger does not know is a fault');
+  assert.ok(unknown.includes('EFFORT  ef M  res (research) run it  #9'), 'and the row still prints beside it');
+});
+
+test('until: merged and until: closed, and on: without until:, close an item from github.txt; nothing known keeps it open', () => {
+  const files = [item('1-m.md', 'STEP merge PR 12\nuntil: merged 12\n'), item('2-c.md', 'NOTE wait on 14\nuntil: closed 14\n'), item('3-o.md', 'STEP merge it\non: pr 12\n'), item('4-i.md', 'IDEA later\non: issue 15\n')];
+  const open = (gh) => rows([], store(files, '', [], gh)).filter((r) => /^(STEP|MINE)/.test(r));
+  assert.deepEqual(open(''), ['STEP    #1  merge PR 12', 'STEP    #3  merge it', 'MINE    #2  wait on 14  until: closed 14']);
+  assert.deepEqual(open('pr 12 OPEN\nissue 14 OPEN\nissue 15 OPEN'), ['STEP    #1  merge PR 12', 'STEP    #3  merge it', 'MINE    #2  wait on 14  until: closed 14']);
+  assert.deepEqual(open('pr 12 MERGED\nissue 14 CLOSED\nissue 15 CLOSED'), ['MINE    file: #1 #2 #3 #4']);
+  assert.deepEqual(open('pr 12 CLOSED'), ['STEP    #1  merge PR 12', 'STEP    #3  merge it', 'MINE    #2  wait on 14  until: closed 14'], 'a closed PR is not merged');
+});
+
+test('a RUN row names the kind and the gate of its prompt beside the Done when', () => {
+  const text = buildPrompt('x', { ask: 'a', done: 'rows show it' }, { kind: 'implement', gate: true });
+  assert.deepEqual(rows([lane('x', 'not_found')], store([]), { prompts: new Map([['x', text]]) })[0], 'RUN     prompt-x.txt  implement gate  rows show it');
+});
+
+test('a prompt is five fields under 2000 characters, a Kind line, the kind\'s protocol, the address rule and the kind\'s REPORT keys; the refusals', () => {
+  const fields = { ask: 'A teammate asked for requested vs capacity per node row, as a bar.', why: 'customers read the table daily', done: 'each row shows the bar', fences: 'web/ only; web/sentry.config.ts belongs to a live lane; branch from main', pointers: '#10600 docs/notes.md https://x.y/z' };
+  const K = { kind: 'implement' };
+  assert.deepEqual(promptFaults('cols', fields, new Set([21]), K), []);
+  const text = buildPrompt('cols', { ...fields, ask: 'line one\n  line two' }, K);
+  assert.equal(text.split('\n')[0], 'TASK cols');
+  assert.equal(text.split('\n')[1], 'Kind: implement');
+  assert.equal(promptField(text, 'Ask'), 'line one line two', 'a newline inside a field becomes a space');
+  assert.equal(promptField(text, 'Kind'), 'implement');
+  assert.equal(promptField(text, 'Pointers'), '#10600 docs/notes.md https://x.y/z');
+  assert.equal(promptField(text, 'Nope'), '');
+  assert.equal(promptField('TASK x\nFences: a/\n  b/\nDone when: y\n', 'Fences'), 'a/ b/', 'an indented line continues the field above');
+  assert.match(text, /\nProtocol \(implement\): deliver the way the Fences say this repo works: a worktree and a PR .* or commits on main .* You never merge and never push/);
+  assert.match(text, /Instructions for you arrive headed `TO cols`; one headed `TO` another name is not yours: say so and stop/);
+  assert.match(text, /\nREPORT cols\nwhat: /);
+  assert.match(text, /\npr: <url>, or none\n/);
+  assert.match(text, /Pointers are leads to read, not facts/);
+  assert.doesNotMatch(text, /Gate:|Ticket #|Effort:/);
+  assert.equal(FIELD_MAX, 2000);
+  assert.deepEqual(promptFaults('cols', { ...fields, ask: '', done: '' }, new Set(), K), ['Ask is empty', 'Done when is empty']);
+  assert.deepEqual(promptFaults('cols', { ...fields, fences: 'see dakr/server/k8s.go:~1165' }, new Set(), K), ['Fences cites dakr/server/k8s.go:~1165: a plan, not intent']);
+  assert.deepEqual(promptFaults('cols', { ...fields, ask: 'x'.repeat(2001) }, new Set(), K), ['Ask is 2001 characters; at most 2000']);
+  assert.deepEqual(promptFaults('cols', { ...fields, ask: 'x'.repeat(1999) }, new Set(), K), []);
+  assert.deepEqual(promptFaults('cols', { ...fields, pointers: '#21 #10600' }, new Set([21]), K), ["Pointers names item #21: an item is the coordinator's, never a worker's"]);
+  assert.deepEqual(promptFaults('Cols_1', fields, new Set(), K), ["name 'Cols_1' is not lower-case letters, digits and dashes"]);
+  assert.deepEqual(promptFaults('cols', fields, new Set(), {}), ["kind '' is not one of research scoping prototype implement alternative review map"]);
+  assert.deepEqual(promptFaults('cols', fields, new Set(), { kind: 'build' }), ["kind 'build' is not one of research scoping prototype implement alternative review map"]);
+  assert.deepEqual(promptFaults('cols', fields, new Set(), { kind: 'research', gate: true }), ['--gate belongs to an implement lane']);
+  assert.deepEqual(promptFaults('cols', fields, new Set(), { kind: 'implement', runner: true }), ['--runner belongs to a research lane']);
+});
+
+test('every kind has a protocol and its own REPORT keys; the gate, the runner, the ticket and the effort print only when asked', () => {
+  for (const kind of LANE_KINDS) {
+    const t = buildPrompt('x', { ask: 'a', done: 'd' }, { kind });
+    assert.match(t, new RegExp(`\\nProtocol \\(${kind}`), kind);
+    assert.match(t, /TO x/, kind);
+  }
+  const keys = (kind) => buildPrompt('x', { ask: 'a', done: 'd' }, { kind }).split('REPORT x\n')[1].trim().split('\n').map((l) => l.split(':')[0]);
+  assert.deepEqual(keys('research'), ['what', 'evidence', 'verdict', 'open']);
+  assert.deepEqual(keys('scoping'), ['brief', 'decisions', 'open']);
+  assert.deepEqual(keys('prototype'), ['commits', 'ruling', 'open']);
+  assert.deepEqual(keys('implement'), ['what', 'commits', 'pr', 'checks', 'open']);
+  assert.deepEqual(keys('alternative'), ['case', 'evidence', 'open']);
+  assert.deepEqual(keys('review'), ['findings', 'verdict', 'open']);
+  assert.deepEqual(keys('map'), ['map', 'tickets', 'open']);
+  const gated = buildPrompt('cell', { ask: 'a', done: 'd' }, { kind: 'implement', gate: true, ticket: 10685, effort: 'cells' });
+  assert.equal(gated.split('\n')[1], 'Kind: implement gate');
+  assert.equal(gated.split('\n')[2], 'Effort: cells');
+  assert.match(gated, /Ticket #10685: claim it first/);
+  assert.match(gated, /Gate: after the amendments, stop and wait\. Build only on a message headed `TO cell` that carries the word build\. Never ask for it through a question tool/);
+  const runner = buildPrompt('probe', { ask: 'a', done: 'd' }, { kind: 'research', runner: true });
+  assert.equal(runner.split('\n')[1], 'Kind: research runner');
+  assert.match(runner, /Production reads go through a runner: .* the user runs it with ! in this session and tees the output to a file with no credentials in it/);
+  assert.match(runner, /Two passes are normal/);
+  assert.doesNotMatch(buildPrompt('probe', { ask: 'a', done: 'd' }, { kind: 'research' }), /runner/);
+  assert.match(buildPrompt('r', { ask: 'a', done: 'd' }, { kind: 'research', ticket: 7 }), /Claim #7 first/);
+  assert.match(buildPrompt('f', { ask: 'a', done: 'd' }, { kind: 'implement', force: true }).split('\n')[1], /^Kind: implement forced$/);
+  assert.equal(protocolOf('x', { kind: 'nope' }), '');
+  const plain = buildPrompt('old', { ask: 'a', done: 'd' });
+  assert.doesNotMatch(plain, /Kind:|Protocol/, 'no kind: a prompt without a Kind line, still readable');
+});
+
+test('a prompt against its effort: the kind must be on the path, an S effort has no gate, an M implement needs one, a kind is not written twice; --force overrides', () => {
+  const ef = parseItem('9-ef.md', 'EFFORT ef x\nsize: M\npath: research implement\nlanes: research=res\n');
+  assert.deepEqual(effortFaults(null, { kind: 'implement' }), ['no open EFFORT item of that name']);
+  assert.deepEqual(effortFaults(ef, { kind: 'implement', gate: true }), []);
+  assert.deepEqual(effortFaults(ef, { kind: 'implement' }), ["an M effort's implement lane needs --gate (claim, verify, amendments, stop for build); --force to skip it"]);
+  assert.deepEqual(effortFaults(ef, { kind: 'implement', force: true }), []);
+  assert.deepEqual(effortFaults(ef, { kind: 'prototype' }), ['kind prototype is not on the path of ef (research implement); --force to write it anyway']);
+  assert.deepEqual(effortFaults(ef, { kind: 'research' }), ['ef already has a research lane: res; retire it or --force']);
+  const small = parseItem('9-ef.md', 'EFFORT ef x\nsize: S\npath: implement\n');
+  assert.deepEqual(effortFaults(small, { kind: 'implement', gate: true }), ['an S effort has no gate: it goes straight to the PR']);
+  assert.deepEqual(effortFaults(small, { kind: 'implement' }), []);
+  assert.deepEqual(effortFaults(parseItem('9-ef.md', 'EFFORT ef x\nsize: M\n'), { kind: 'research' }), ['effort ef has no path: rule the card first (L set ef path "…")']);
+});
+
+test('fields read from a draft file: a label starts a field, following lines continue it to a blank line, text before the first label is ignored', () => {
+  const f = parseFields('# draft\n\nAsk: do the thing\n  across two lines\nWhy now: because\n\nDone when: it is done\nFences: web/ only\nPointers: #1\n\ntrailing notes\n');
+  assert.deepEqual(f, { ask: 'do the thing across two lines', why: 'because', done: 'it is done', fences: 'web/ only', pointers: '#1' });
+  assert.deepEqual(parseFields('done when: lower case label works\n'), { done: 'lower case label works' });
+  assert.deepEqual(parseFields('Nope: not a field\n'), {});
+});
+
+test('setHeaderKey replaces a key in the header or adds it before the first blank line; the body is untouched', () => {
+  assert.equal(setHeaderKey('EFFORT e x\nsize: S\n\nbody: not a key\n', 'size', 'M'), 'EFFORT e x\nsize: M\n\nbody: not a key\n');
+  assert.equal(setHeaderKey('EFFORT e x\nsize: S\n\nbody\n', 'path', 'research implement'), 'EFFORT e x\nsize: S\npath: research implement\n\nbody\n');
+  assert.equal(setHeaderKey('EFFORT e x\n', 'size', ' L '), 'EFFORT e x\nsize: L\n');
+  assert.equal(setHeaderKey('EFFORT e x', 'size', 'L'), 'EFFORT e x\nsize: L');
+});
+
+test('the scout prompt carries the repo, the effort, its body and the card shape; the hook JSON is one object', () => {
+  const p = scoutPrompt('/repo', parseItem('9-ef.md', 'EFFORT ef fix the legend\n\nuser words here\n'));
+  assert.match(p, /^Read-only; edit nothing\. Repo \/repo\. Effort ef: fix the legend\n\nuser words here\n\nAnswer in at most 250 words as a scope card\. Size: S/);
+  assert.match(p, /Path: the lane kinds in order, from research, scoping, prototype, implement, alternative, review, map/);
+  assert.doesNotThrow(() => JSON.parse(HOOK_JSON));
+});
+
+test('githubRefs names every number an open item or a reported lane points at; syncGithub asks only for what is not terminal, keeps a line gh cannot refresh, prunes what nothing names, and says what moved', () => {
+  const st = store([item('1-s.md', 'STEP merge\nuntil: merged 12\n'), item('2-e.md', 'EFFORT e x\non: issue 14\n'), item('3-n.md', 'NOTE n\nuntil: closed 15\n'), item('4-l.md', 'LANE done-lane\n')], 'OK done-lane 08:00 x', [], 'pr 12 OPEN\nissue 14 OPEN\nissue 99 CLOSED old title\npr 7 MERGED');
+  const results = [lane('imp', 'finished', { closed_at: T('09:00'), report: 'REPORT imp\npr: https://github.com/o/r/pull/7' }), lane('none', 'finished', { closed_at: T('09:00'), report: 'REPORT none\npr: none' })];
+  assert.deepEqual([...githubRefs(st, results)], [[12, 'pr'], [14, 'issue'], [15, 'issue'], [7, 'pr']]);
+  assert.deepEqual([...githubRefs(st, results, (it) => it.file === '1-s.md')], [[14, 'issue'], [15, 'issue'], [7, 'pr']], 'a satisfied item is not asked about');
+  const asked = [];
+  const lookup = (n) => {
+    asked.push(n);
+    if (n === 15) throw new Error('gh: not found');
+    return { type: n === 12 || n === 7 ? 'pr' : 'issue', n, state: n === 12 || n === 7 ? 'MERGED' : 'OPEN', at: n === 12 ? '2026-09-09T05:34:29Z' : null, title: `t${n}` };
+  };
+  const out = syncGithub('/repo', st, results, { lookup });
+  assert.deepEqual(asked, [12, 14, 15], 'the merged PR 7 is terminal and not asked again; 15 failed');
+  assert.deepEqual(out.lines, ['pr 7 MERGED', 'pr 12 MERGED 2026-09-09T05:34:29Z t12', 'issue 14 OPEN t14']);
+  assert.deepEqual(out.changed, ['#12: open -> merged (pr) t12', '#15: no answer from gh (issue)']);
+  assert.deepEqual(out.failed, [15]);
+  assert.deepEqual(syncGithub('/repo', st, results, { lookup, all: true }).changed.filter((c) => c.startsWith('#7')), [], 'a re-asked terminal number that did not move prints nothing');
+  assert.equal(asked.filter((n) => n === 7).length, 1, '--all asks the terminal number too');
+});
+
+test('who: one row per launched lane with the session name, the tty, the registry status, the idle time and the cwd; a lane whose process is gone says so', () => {
+  const registry = [{ sessionId: 'a-session-id', pid: 11, name: 'services-cd', status: 'idle', cwd: `${os.homedir()}/repo` }, { sessionId: 'b-session-id', name: 'services-3a', status: 'busy', cwd: '/x' }];
+  const results = [lane('a', 'in_progress', { peer: 'services-cd', mtime: NOW - 90000 }), lane('b', 'stopped', { peer: 'services-3a' }), lane('c', 'not_found', { session: null }), lane('d', 'exited', { mtime: NOW - 3600000 })];
+  assert.deepEqual(whoRows(results, registry, (pid) => (pid === 11 ? 'ttys003' : ''), NOW), ['a  services-cd  ttys003  idle  idle 1m  ~/repo', 'b  services-3a  gone  busy  idle 5s  /x', 'd  d-sessio  gone  exited  idle 1h0m  ']);
+});
+
+test('a relayed ruling is the user\'s text under a TO heading; SENT and DID lines are lanes.txt tags the board accepts', () => {
+  assert.equal(relayText('hourly-predicate', 'Ruling on amendment 1: (a). build'), 'TO hourly-predicate\nRuling on amendment 1: (a). build');
+  const st = store([], 'OK a 08:00 x\nSENT a 08:05 build\nDID e 08:06 closed #14 with the resolution\nRUN a build');
+  assert.deepEqual(st.lanes.map((l) => [l.tag, l.name]), [['OK', 'a'], ['SENT', 'a'], ['DID', 'e'], ['RUN', 'a']]);
+  assert.deepEqual(rows([], st).filter((r) => r.startsWith('BAD')), []);
+});
+
+
+test('an unknown kind, a missing headline, and a LANE or HOLD without a lane are faults; HOLD and LANE may have no headline', () => {
+  assert.match(parseItem('24-t.md', 'TODO fix this\n').bad[0], /#24 kind TODO unknown/);
+  assert.match(parseItem('25-d.md', 'DECIDE\n').bad[0], /#25 no headline/);
+  assert.match(parseItem('26-h.md', 'HOLD\n').bad[0], /#26 no lane/);
+  assert.deepEqual(parseItem('26-h.md', 'HOLD some-lane\n').bad, []);
+  assert.deepEqual(parseItem('27-l.md', 'LANE some-lane\n').bad, []);
+});
+
+test('the board: rows grouped by who acts, faults first, OK fresh only with the lane\'s latest time, CLOSE and DONE one line each, CTX last', () => {
+  const results = [
+    lane('a', 'not_found'),
+    lane('b', 'stopped', { peer: 'repo-9b', session_open: true, ask: 'Which branch should I use?', asked: true }),
+    lane('c', 'stalled', { peer: 'repo-3f', session_open: true, mtime: NOW - 12 * 60 * 1000 }),
+    lane('d', 'continued', { peer: 'repo-2a', session_open: true, closed_at: T('07:10'), moved_at: T('07:30'), ask: 'Should I also touch CHANGELOG?', asked: true, report: 'REPORT d' }),
+    lane('e', 'in_progress', { peer: 'repo-7c', session_open: true, prompt_at: T('23:50', '2026-09-04') }),
+    lane('f', 'exited'),
+    lane('g', 'finished', { closed_at: T('07:40'), report: 'REPORT g' }),
+    lane('h', 'finished', { peer: 'repo-5d', session_open: true, closed_at: T('07:45'), report: 'REPORT h' }),
+    lane('i', 'not_found'),
+    lane('j', 'not_found'),
+    lane('k', 'continued', { closed_at: T('07:50'), moved_at: T('07:55'), ask: 'done?', asked: true, report: 'REPORT k' }),
+    lane('l', 'continued', { peer: 'repo-1f', session_open: true, closed_at: T('07:50'), moved_at: T('07:58'), ask: 'I also fixed lint.', asked: false, report: 'REPORT l' }),
+    lane('m', 'finished', { peer: 'repo-4c', session_open: true, closed_at: T('07:59'), report: 'REPORT m' }),
+    lane('n', 'continued', { peer: 'repo-6e', session_open: true, closed_at: T('07:50', '2026-09-04'), moved_at: T('07:57', '2026-09-04'), ask: 'Tag it too?', asked: true, report: 'REPORT n' }),
+  ];
+  const st = store(
+    [
+      item('1-ship.md', 'DECIDE ship the codemod tonight or hold for review?\n'),
+      item('2-r14.md', 'LANE r14 the next wire\nafter: e\n\nscope notes\n'),
+      item('3-stop.md', 'STEP press Stop on i\nblocks: i\n'),
+      item('4-ci.md', 'NOTE keep an eye on CI\n'),
+      item('5-hold-e.md', 'HOLD e\nafter: a\n'),
+    ],
+    ['OK h 07:45 4f2a1c', 'OK k 07:55 9bd031', 'OK z 07:00 no commits', 'OK e 07:00 abc', 'OK d 07:10 abc', 'OK m 4f2a1c', 'OK n 09-04 07:57 dead', 'RUN j probe', 'RUN e do'].join('\n'),
+  );
+  assert.deepEqual(rows(results, st, { ctx: '187K/1M', repo: 'repo' }), [
+    'BAD     #5 HOLD e: already launched',
+    'RUN     prompt-a.txt',
+    'RUN     prompt-j.txt',
+    'ANSWER  b  repo-9b  asked: Which branch should I use?',
+    'ANSWER  c  repo-3f  idle 12m, no activity',
+    'ANSWER  d  repo-2a  after report: Should I also touch CHANGELOG?',
+    'DECIDE  #1  ship the codemod tonight or hold for review?',
+    'STEP    #3  press Stop on i  blocks: i',
+    'CLOSE   h (repo-5d)  n (repo-6e)',
+    'LIVE    e  repo-7c  since 09-04 23:50',
+    'MINE    d  re-verify 07:30',
+    'MINE    f  exited without report, re-issue',
+    'MINE    g  verify report 07:40',
+    'MINE    i  held: #3',
+    'MINE    l  re-verify 07:58',
+    'MINE    m  verify report 07:59',
+    'MINE    r14  write prompt after e  #2',
+    'MINE    #4  keep an eye on CI',
+    'MINE    stale: OK e 07:00 abc',
+    'MINE    stale: OK d 07:10 abc',
+    'MINE    stale: OK m 4f2a1c',
+    'DONE    k  1 filed',
+    'CTX     coordinator 187K/1M  repo: 14 lanes  items 5',
+  ]);
+  assert.deepEqual(rows([lane('a', 'not_found')], store([], 'RUN a build')), ['RUN     prompt-a.txt', 'CTX     coordinator ?  ?: 1 lane  items 0'], 'a RUN line from an older store is read and ignored');
+  assert.equal(rows([lane('b', 'stopped', { session: null, ask: 'q?', asked: true })], store([]))[0], 'ANSWER  b  ?  asked: q?');
+  assert.deepEqual(rows([results[3]], store([], 'OK d 07:30 abc')), ['CLOSE   d (repo-2a)', 'CTX     coordinator ?  ?: 1 lane  items 0']);
+});
+
+test('every edge target must be a prompt file, an OK line, or a LANE item; a dangling target is a BAD row', () => {
+  const dangling = store([item('1-a.md', 'NOTE n\nuntil: ok ghost\n'), item('2-b.md', 'DECIDE q\nblocks: phantom\n'), item('3-c.md', 'LANE x scope\nafter: nobody\n')], 'OK real 07:10 abc');
+  const bad = rows([lane('real', 'finished', { closed_at: T('07:10') })], dangling).filter((r) => r.startsWith('BAD'));
+  assert.deepEqual(bad, ["BAD     #1 names unknown lane 'ghost'", "BAD     #2 names unknown lane 'phantom'", "BAD     #3 names unknown lane 'nobody'"]);
+  const declared = store([item('1-a.md', 'NOTE n\nuntil: ok future\n'), item('2-f.md', 'LANE future scope\n'), item('3-g.md', 'NOTE m\nuntil: ok real\n')], 'OK real 07:10 abc');
+  assert.ok(!rows([], declared).some((r) => r.startsWith('BAD')));
+});
+
+test('a HOLD suppresses the RUN row while any after: lane lacks a fresh OK, names the unmet ones, and releases the turn the last one is fresh', () => {
+  const files = [item('18-h.md', 'HOLD integration-gate shares worktrees.ts\nafter: slot-key r15\n')];
+  const results = [lane('integration-gate', 'not_found'), lane('slot-key', 'finished', { closed_at: T('07:10') }), lane('r15', 'finished', { closed_at: T('07:20') })];
+  const held = rows(results, store(files, 'OK slot-key 07:10 abc\nRUN integration-gate build'));
+  assert.ok(held.includes('MINE    integration-gate  held: #18 after r15'));
+  assert.ok(!held.some((r) => /^RUN/.test(r)));
+  const released = rows(results, store(files, 'OK slot-key 07:10 abc\nOK r15 07:20 def\nRUN integration-gate build'));
+  assert.ok(released.includes('RUN     prompt-integration-gate.txt'));
+  assert.ok(released.includes('MINE    file: #18'));
+  assert.ok(!released.some((r) => /held:/.test(r)));
+});
+
+test('an edge is satisfied only by a fresh OK: a lane that moves after its OK re-engages every hold and note that named it', () => {
+  const st = store([item('18-h.md', 'HOLD x\nafter: y\n'), item('3-n.md', 'NOTE handed\nuntil: ok y\n')], 'OK y 07:10 abc\nRUN x build');
+  const quiet = rows([lane('x', 'not_found'), lane('y', 'finished', { closed_at: T('07:10') })], st);
+  assert.ok(quiet.includes('RUN     prompt-x.txt'));
+  assert.ok(quiet.includes('MINE    file: #3 #18'));
+  const moved = rows([lane('x', 'not_found'), lane('y', 'continued', { closed_at: T('07:10'), moved_at: T('07:30') })], st);
+  assert.ok(moved.includes('MINE    y  re-verify 07:30'));
+  assert.ok(moved.includes('MINE    x  held: #18 after y'));
+  assert.ok(moved.includes('MINE    #3  handed  until: ok y'));
+  assert.ok(!moved.some((r) => /file:/.test(r)));
+});
+
+test('a lane whose prompt file is gone is trusted on its last OK, because the watch cannot see it move', () => {
+  const st = store([item('3-n.md', 'NOTE handed\nuntil: ok y\n'), item('6-l.md', 'LANE z scope\nafter: y\n')], 'OK y 07:10 abc');
+  const out = rows([], st);
+  assert.ok(out.includes('MINE    file: #3'));
+  assert.ok(out.includes('MINE    z  write prompt now  #6'));
+  assert.ok(out.includes('DONE    1 filed'));
+});
+
+test('a HOLD or LANE naming a launched lane, and a blocks: edge to a launched lane, are faults', () => {
+  const st = store([item('20-h.md', 'HOLD x\nafter: y\n'), item('9-d.md', 'DECIDE q\nblocks: x\n'), item('7-l.md', 'LANE x scope\n')], 'RUN y build');
+  const bad = rows([lane('x', 'in_progress', { peer: 'p', prompt_at: T('07:00') }), lane('y', 'not_found')], st).filter((r) => r.startsWith('BAD'));
+  assert.deepEqual(bad, ['BAD     #9 blocks x: already launched', 'BAD     #20 HOLD x: already launched']);
+  assert.ok(!bad.some((r) => /#7/.test(r)), 'a LANE whose prompt exists is satisfied, not stale');
+});
+
+test('a LANE item closes when its prompt file exists or an OK names it, so deleting a DONE prompt file does not reopen it', () => {
+  const files = [item('6-l.md', 'LANE floor scope\nafter: grant\n')];
+  assert.ok(rows([], store(files, 'OK floor 08:00 abc')).includes('MINE    file: #6'));
+  assert.ok(rows([lane('floor', 'in_progress', { peer: 'p', prompt_at: T('07:00') }), lane('grant', 'not_found')], store(files)).includes('MINE    file: #6'));
+  assert.ok(rows([lane('grant', 'not_found')], store(files)).includes('MINE    floor  write prompt after grant  #6'));
+});
+
+test('a DECIDE or STEP that blocks a future lane shows on the lane row; the lane row lists unmet lanes first, then items', () => {
+  const st = store([item('15-s.md', 'STEP deploy\nblocks: rerun4\n'), item('14-l.md', 'LANE rerun4 scope\nafter: grant gate\n')], 'OK grant 08:00 abc');
+  const out = rows([lane('gate', 'not_found')], st);
+  assert.ok(out.includes('STEP    #15  deploy  blocks: rerun4'));
+  assert.ok(out.includes('MINE    rerun4  write prompt after gate #15  #14'));
+  assert.ok(rows([], store([item('15-s.md', 'STEP deploy\nblocks: rerun4\n'), item('14-l.md', 'LANE rerun4 scope\n')])).includes('MINE    rerun4  write prompt after #15  #14'));
+});
+
+test('cycles are one BAD row each, reported once', () => {
+  const st = store([item('22-a.md', 'LANE a\nafter: b\n'), item('23-b.md', 'LANE b\nafter: a\n'), item('24-c.md', 'HOLD c\nafter: d\n'), item('25-d.md', 'LANE d\nafter: c\n')], '');
+  assert.deepEqual(rows([lane('c', 'not_found')], st).filter((r) => /cycle/.test(r)), ['BAD     cycle: a -> b -> a', 'BAD     cycle: c -> d -> c']);
+});
+
+test('the same id twice, or one item both open and closed, is a BAD row and both rows still print', () => {
+  const dup = rows([], store([item('6-a.md', 'NOTE a\n'), item('6-b.md', 'NOTE b\n')]));
+  assert.ok(dup.includes('BAD     dup id 6: 6-a.md 6-b.md'));
+  assert.equal(dup.filter((r) => /^MINE    #6/.test(r)).length, 2);
+  const both = rows([], store([item('1-a.md', 'NOTE a\n')], '', ['1-a.md', '9-z.md']));
+  assert.ok(both.includes('BAD     #1 open and closed: 1-a.md, closed/1-a.md'));
+  assert.ok(both.includes('MINE    #1  a'));
+});
+
+test('lanes.txt is only OK, SENT and DID; the last OK per lane wins, so re-verification appends and never edits', () => {
+  const st = store([], 'OK x 07:10 old\nOK x 07:30 new\nHOLD y until Stop\nOK');
+  const out = rows([lane('x', 'continued', { closed_at: T('07:10'), moved_at: T('07:30') })], st);
+  assert.deepEqual(out.filter((r) => r.startsWith('BAD')), ["BAD     lanes.txt: 'HOLD y until Stop' is not OK|SENT|DID <lane> <time> <text>", "BAD     lanes.txt: 'OK' is not OK|SENT|DID <lane> <time> <text>"]);
+  assert.ok(!out.some((r) => /stale:/.test(r)));
+  assert.ok(out.includes('DONE    x'));
+});
+
+test('unknown kinds print their raw first line as MINE beside the fault, so nothing a human wrote vanishes', () => {
+  const out = rows([], store([item('24-t.md', 'TODO fix this\n')]));
+  assert.ok(out.includes('BAD     #24 kind TODO unknown'));
+  assert.ok(out.includes('MINE    #24  TODO fix this'));
+});
+
+test('IDEA items never print; CTX counts them apart from items', () => {
+  const out = rows([], store([item('1-i.md', 'IDEA a static page over the fold\n'), item('2-n.md', 'NOTE n\n')]));
+  assert.ok(!out.some((r) => /static page/.test(r)));
+  assert.equal(out.at(-1), 'CTX     coordinator ?  ?: 0 lanes  items 1  ideas 1');
+});
+
+test('headlines print capped at 96 characters with an ellipsis; the file keeps the full line', () => {
+  const it = parseItem('1-a.md', `NOTE ${'w'.repeat(200)}\n`);
+  assert.equal(it.head.length, 200);
+  assert.match(rows([], store([item('1-a.md', `NOTE ${'w'.repeat(200)}\n`)]))[0], /^MINE {4}#1 {2}w{95}…$/);
+});
+
+test('CTX names a second live coordinator or watch instead of a hand-written line', () => {
+  assert.equal(rows([], store([]), { coordinators: 2, watches: 3 }).at(-1), 'CTX     coordinator ?  ?: 0 lanes  items 0  coordinators 2  watches 3');
+  assert.equal(rows([], store([]), { coordinators: 1, watches: 1 }).at(-1), 'CTX     coordinator ?  ?: 0 lanes  items 0');
+});
+
+test('the board is a fold: same inputs, same rows; a body of any size changes nothing; board reads leave the store untouched', () => {
+  const small = store([item('1-a.md', 'NOTE n\n\nbody')]);
+  const huge = store([item('1-a.md', `NOTE n\n\n${'x'.repeat(1e6)}`)]);
+  assert.deepEqual(rows([], small), rows([], huge));
+  const dir = path.join(HERE, 'fixtures', 'store', 'coordinator');
+  const snapshot = () => Object.fromEntries(fs.readdirSync(dir).map((f) => [f, fs.statSync(path.join(dir, f)).mtimeMs]));
+  const before = snapshot();
+  const a = rows(FIXTURE_LANES, readStore(path.dirname(dir), dir));
+  const b = rows(FIXTURE_LANES, readStore(path.dirname(dir), dir));
+  assert.deepEqual(a, b);
+  assert.deepEqual(snapshot(), before);
+  assert.ok(a.includes('MINE    docs-apply-r51  write prompt after gate-amendments  #9'));
+  assert.ok(a.includes('DONE    15 filed'));
+});
+
+// The fixture ledger as of 2026-09-07 11:55, with the two lanes its items name.
+const FIXTURE_LANES = [lane('gate-amendments', 'not_found'), lane('scratch-write-grant', 'in_progress', { peer: 'nightshift-b7', session_open: true, prompt_at: T('08:33') })];
+
+test('the fixture ledger has no faults and renders in 20 rows; the bad fixture has every fault the design names', () => {
+  const good = rows(FIXTURE_LANES, readStore(path.join(HERE, 'fixtures', 'store'), path.join(HERE, 'fixtures', 'store', 'coordinator')), { ctx: '66K/1M', repo: 'nightshift' });
+  assert.deepEqual(good.filter((r) => r.startsWith('BAD')), []);
+  assert.equal(good.length, 20);
+  assert.equal(good[0], 'RUN     prompt-gate-amendments.txt');
+  assert.ok(good.includes('MINE    phase4-rerun4  write prompt after gate-amendments scratch-write-grant #15  #14'));
+  assert.ok(good.includes('STEP    #17  release the daemon after PR 12 merges'), 'until: merged 12 stays open while github.txt says OPEN');
+  assert.ok(good.includes('EFFORT  slot-key-cleanup M  write prompt implement  #16'), 'the research lane is verified on its OK, the implement lane is next');
+  assert.equal(good.at(-1), 'CTX     coordinator 66K/1M  nightshift: 2 lanes  items 16');
+  const bad = rows(FIXTURE_LANES, readStore(path.join(HERE, 'fixtures', 'store-bad'), path.join(HERE, 'fixtures', 'store-bad', 'coordinator'))).filter((r) => r.startsWith('BAD'));
+  for (const re of [/lanes\.txt: 'HOLD old-lane/, /#1 open and closed/, /#1 names unknown lane 'docs-apply-r51'/, /#21 header line not a known key/, /#21 until:/, /#24 kind TODO unknown/, /#25 no headline/, /dup id 6/, /cycle: a-lane -> b-lane -> a-lane/, /github\.txt: 'pr 12 DONE'/, /#26 size: 'XL'/, /#26 path names 'build'/, /#26 lanes: 'implement-x'/, /#26 on: 'ticket 5'/, /#26 lanes: prototype is not on the path/, /#26 names unknown lane 'nothing-here'/, /#27 size: only an EFFORT carries it/]) assert.ok(bad.some((r) => re.test(r)), String(re));
+});
+
+test('new mints max+1 across open and closed, refuses an existing filename, and steps past a twin id', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-store-'));
+  fs.mkdirSync(path.join(dir, 'closed'));
+  fs.writeFileSync(path.join(dir, '3-y.md'), 'NOTE y\n');
+  fs.writeFileSync(path.join(dir, 'closed', '7-x.md'), 'NOTE x\n');
+  assert.equal(nextId(dir), 8);
+  const a = mintItem(dir, 'Hello, World! and more', 'NOTE hello\n');
+  assert.equal(a.id, 8);
+  assert.equal(path.basename(a.file), '8-hello-world-and-more.md');
+  assert.equal(fs.readFileSync(a.file, 'utf8'), 'NOTE hello\n');
+  fs.writeFileSync(path.join(dir, '9-taken.md'), 'NOTE taken\n');
+  const b = mintItem(dir, 'hello', 'NOTE again\n');
+  assert.equal(b.id, 10);
+  assert.throws(() => fs.writeFileSync(a.file, 'x', { flag: 'wx' }), /EEXIST/);
+  assert.equal(slugOf('  --Weird__Name!!  '), 'weird-name');
+  assert.equal(slugOf('x'.repeat(100)).length, 40);
+  assert.equal(slugOf(''), 'item');
+  fs.rmSync(dir, { recursive: true });
+});
+
+test('a turn that ends without a report is stopped, with the tail; a tool_use stop is in_progress', () => {
+  const stopped = analyze([human(PROMPT), assistant('Which branch should I use?', 'end_turn')], NAME);
+  assert.equal(stopped.status, 'stopped');
+  assert.equal(stopped.tail, 'Which branch should I use?');
+  const running = analyze([human(PROMPT), assistant('Running tests.', 'tool_use')], NAME);
+  assert.equal(running.status, 'in_progress');
+  const resumed = analyze([human(PROMPT), assistant('Which branch?', 'end_turn'), human('main'), assistant('ok', 'tool_use')], NAME);
+  assert.equal(resumed.status, 'in_progress');
+});
+
+test('the report body is capped when rendered', () => {
+  const body = Array.from({ length: 100 }, (_, i) => `line ${i}`).join('\n');
+  const r = analyze([human(PROMPT), assistant(`REPORT ${NAME}\n${body}`, 'end_turn')], NAME);
+  const out = render({ ...r, name: NAME, worker_ctx: '10K/1M' }, '20K/1M');
+  assert.match(out, /… 21 more lines$/);
+  assert.match(out, /coordinator ctx 20K\/1M/);
+});
+
+test('ctx sums the statusline set of usage fields from the last assistant record', () => {
+  const recs = [
+    { type: 'assistant', message: { usage: { input_tokens: 1, output_tokens: 2, cache_read_input_tokens: 3, cache_creation_input_tokens: 4 } } },
+    { type: 'assistant', isSidechain: true, message: { usage: { input_tokens: 1000 } } },
+    { type: 'assistant', message: { usage: { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 30, cache_creation_input_tokens: 40 } } },
+    { type: 'user', message: { content: 'x' } },
+  ];
+  assert.equal(ctxTokens(recs), 100);
+  assert.equal(ctxTokens([{ type: 'user', message: { content: 'x' } }]), null);
+});
+
+test('the window comes from the model id, and the model id from argv', () => {
+  assert.equal(modelFromArgv('claude --model fable[1m]'), 'fable[1m]');
+  assert.equal(modelFromArgv('claude --model=opus -p'), 'opus');
+  assert.equal(modelFromArgv('claude --resume abc'), null);
+  assert.equal(windowFromModel('fable[1m]'), 1000000);
+  assert.equal(windowFromModel('claude-opus-5[1m]'), 1000000);
+  assert.equal(windowFromModel('claude-fable-5-1'), 200000);
+  assert.equal(windowFromModel(null), null);
+});
+
+test('an unlaunched prompt is a RUN row with its Done when beside it; a name with an OK is never launched again', () => {
+  const text = buildPrompt('cols', { ask: 'show requested vs capacity per row', done: 'every group and node row shows the bar; unknown rows show a dash, and the teammate who asked can read it', fences: 'web/ only' });
+  const out = rows([lane('cols', 'not_found')], store([]), { prompts: new Map([['cols', text]]) });
+  assert.ok(out[0].startsWith('RUN     prompt-cols.txt  every group and node row shows the bar; unknown rows') && out[0].endsWith('…') && out[0].length === 'RUN     prompt-cols.txt  '.length + 60, out[0]);
+  assert.deepEqual(rows([lane('cols', 'not_found')], store([])).filter((r) => r.startsWith('RUN')), ['RUN     prompt-cols.txt'], 'a hand-written file with no Done when line is still a RUN row');
+  const reused = rows([lane('a', 'not_found')], store([], 'OK a 07:00 abc'));
+  assert.deepEqual(reused.filter((r) => /^(BAD|RUN)/.test(r)), ['BAD     prompt-a.txt: name already verified (OK a 07:00 abc); delete the file if it is that lane, else pick a new name']);
+  assert.ok(!rows([], store([], 'RUN gone build')).some((r) => /stale|BAD/.test(r)), 'a RUN line for a lane whose file is gone is not a row');
+});
+
+test('launch: the RUN rows as `claude -n <name> "$(cat prompt-<name>.txt)"` lines, grouped by disjoint fences, a later block naming the shared path, held prompts under HELD; never prompt text', () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-launch-'));
+  const run = (...a) => execFileSync(process.execPath, [path.join(HERE, 'lane.mjs'), ...a, '--cwd', cwd], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: HERMETIC }).trim();
+  const prompt = (name, fences, i) => {
+    const file = path.join(cwd, `prompt-${name}.txt`);
+    fs.writeFileSync(file, `TASK ${name}\nKind: implement\nAsk: build ${name}, the secret ask\nFences: ${fences}\n`);
+    fs.utimesSync(file, NOW / 1000 + i, NOW / 1000 + i);
+  };
+  assert.equal(run('launch'), 'no prompt to launch');
+  prompt('rows-bar', 'Own worktree .claude/worktrees/rows-bar from origin/main; `web/components/rows/` and web/e2e/rows.spec.ts; no dakr/.', 1);
+  prompt('docs-map', 'Own worktree under .claude/worktrees/ from origin/main; docs/architecture.md, https://github.com/x/y/issues/1 for the map; coordinator/goals.md is read', 2);
+  prompt('rows-test', 'web/components/rows/bar.test.tsx only', 3);
+  prompt('later', 'golib/logging/', 4);
+  run('new', 'HOLD', 'later', '--after', 'docs-map');
+  const out = run('launch');
+  assert.equal(out, [
+    'RUN, two prompts, fences disjoint, launch together:',
+    '  claude -n rows-bar  "$(cat prompt-rows-bar.txt)"',
+    '  claude -n docs-map  "$(cat prompt-docs-map.txt)"',
+    'RUN, after the block above (fences overlap on web/components/rows/):',
+    '  claude -n rows-test "$(cat prompt-rows-test.txt)"',
+    'HELD, not now:',
+    '  claude -n later     "$(cat prompt-later.txt)"         # held: #1 after docs-map',
+  ].join('\n'));
+  assert.ok(!/secret ask/.test(out), 'no prompt text');
+  assert.deepEqual(fenceTokens('(`dakr/server/`, web/app/x.tsx.) README.md http://x/y e.g. main origin/main .claude/reviews/ coordinator/12-x.md CLAUDE.md'), ['dakr/server/', 'web/app/x.tsx', 'README.md']);
+  assert.equal(fenceOverlap(['web/components/'], ['web/components/CostOverviewCard.tsx']), 'web/components/');
+  assert.equal(fenceOverlap(['web/'], ['web/app/x.tsx']), null, 'a top-level directory claims nothing below it');
+  assert.equal(fenceOverlap(['dakr/'], ['dakr/']), null, 'a whole top-level tree is boilerplate-grade, even shared exactly');
+  assert.equal(fenceOverlap(['web/app'], ['web/apples/']), null);
+  fs.rmSync(cwd, { recursive: true });
+  // live: in_progress holds; continued with an OK, finished, and exited never do
+  const prompts = new Map([
+    ['grid', 'Fences: own worktree from origin/main; web/components/CostOverviewCard.tsx only'],
+    ['perf', 'Fences: dakr/server/ and web/components/ from origin/main'],
+    ['done', 'Fences: web/components/ from origin/main'],
+    ['gone', 'Fences: docs/ from origin/main'],
+    ['caption', 'Fences: web/components/CostOverviewCard.tsx from origin/main'],
+    ['docs', 'Fences: docs/agents/ from origin/main'],
+  ]);
+  const results = [lane('grid', 'in_progress', { prompt_at: T('07:00') }), lane('perf', 'continued', { closed_at: T('07:10'), moved_at: T('07:30'), report: 'REPORT perf' }), lane('done', 'finished', { closed_at: T('07:20'), report: 'REPORT done' }), lane('gone', 'exited'), lane('caption', 'not_found'), lane('docs', 'not_found')];
+  const st = store([], 'OK perf 07:30 abc');
+  assert.deepEqual(launchBlock(rows(results, st, { prompts }), results, prompts, st), [
+    'RUN, one prompt:',
+    '  claude -n docs    "$(cat prompt-docs.txt)"',
+    'HELD, not now:',
+    '  claude -n caption "$(cat prompt-caption.txt)"     # overlaps live grid on web/components/CostOverviewCard.tsx',
+  ]);
+  const unverified = store([]);
+  assert.match(launchBlock(rows(results, unverified, { prompts }), results, prompts, unverified).join('\n'), /caption "\$\(cat prompt-caption\.txt\)"     # overlaps live grid on/, 'the in_progress lane names the hold first');
+  assert.match(launchBlock(rows(results.slice(1), unverified, { prompts }), results.slice(1), prompts, unverified).join('\n'), /caption "\$\(cat prompt-caption\.txt\)"     # overlaps live perf on web\/components\//, 'continued without an OK still holds');
+});
+
+test('deltaLine counts efforts apart from you, live and mine', () => {
+  assert.equal(deltaLine(null, ['EFFORT  e M  write prompt research  #9', 'MINE    #1  x', 'CTX     c'], '08:00:00'), 'board 08:00:00 · first · you 0 · efforts 1 · live 0 · mine 1');
+});
+
+test('deltaLine names the rows that appeared and vanished, never CTX, then counts by who acts', () => {
+  const a = ['RUN     prompt-x.txt', 'DECIDE  #1  ship?', 'LIVE    y  peer  since 07:00', 'MINE    z  verify report 07:40', 'CTX     coordinator 10K/1M  repo: 3 lanes  items 1'];
+  assert.equal(deltaLine(null, a, '08:00:00'), 'board 08:00:00 · first · you 2 · live 1 · mine 1');
+  assert.equal(deltaLine(a, [...a.slice(0, 4), 'CTX     coordinator 20K/1M'], '08:01:00'), 'board 08:01:00 · no change · you 2 · live 1 · mine 1');
+  const b = ['BAD     #2 names unknown lane q', 'DECIDE  #1  ship?', 'LIVE    y  peer  since 07:00', 'DONE    z', 'CTX     c'];
+  assert.equal(deltaLine(a, b, '08:02:00'), 'board 08:02:00 · +BAD #2 names unknown lane q · +DONE z · -RUN prompt-x.txt · -MINE z verify report 07:40 · bad 1 · you 1 · live 1 · mine 0');
+  assert.equal(deltaLine([], [`MINE    #3  ${'x'.repeat(80)}`, 'CTX c'], '08:03:00'), `board 08:03:00 · +MINE #3 ${'x'.repeat(47)}… · you 0 · live 0 · mine 1`);
+});
+
+test('a lane whose session is gone is exited only after the grace, so a --resume is not a re-issue', () => {
+  const res = { session: 's1', report: null };
+  assert.equal(exited(res, null, false, EXIT_GRACE_MS + 1), true, 'no registry entry, idle past the grace');
+  assert.equal(exited(res, null, false, EXIT_GRACE_MS - 1), false, 'no registry entry, still inside the grace');
+  assert.equal(exited(res, { pid: 1 }, false, EXIT_GRACE_MS + 1), true, 'dead pid past the grace');
+  assert.equal(exited(res, { pid: 1 }, true, EXIT_GRACE_MS + 1), false, 'alive');
+  assert.equal(exited({ session: 's1', report: 'REPORT x' }, null, false, EXIT_GRACE_MS + 1), false, 'a reported lane is never exited');
+  assert.equal(exited(res, { pid: 0 }, false, EXIT_GRACE_MS + 1), false, 'an entry without a pid says nothing');
+  assert.equal(latestTime({ status: 'finished', closed_at: T('07:40') }, NOW), '07:40');
+  assert.equal(latestTime({ status: 'continued', closed_at: T('07:40'), moved_at: T('07:55') }, NOW), '07:55');
+});
+
+test('goals.md, handoff.md and board.txt live beside the items and are never items; the CLI writes prompts, OKs, retirements and the board file', () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-cli-'));
+  const dir = path.join(cwd, 'coordinator');
+  const run = (...a) => execFileSync(process.execPath, [path.join(HERE, 'lane.mjs'), ...a, '--cwd', cwd], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: HERMETIC }).trim();
+  const fails = (...a) => {
+    try {
+      run(...a);
+    } catch (e) {
+      return String(e.stderr).trim();
+    }
+    throw new Error(`expected failure: ${a.join(' ')}`);
+  };
+  assert.match(fails('delta'), /no coordinator\/: run lane\.mjs init first/);
+  assert.equal(run('init'), 'coordinator/\ncoordinator/goals.md: skeleton, fill it in\nnot a git repo: /coordinator/ /prompt-*.txt not excluded');
+  assert.equal(fs.readFileSync(path.join(dir, 'goals.md'), 'utf8'), GOALS_TEMPLATE);
+  assert.equal(run('init'), 'coordinator/: exists\nnot a git repo: /coordinator/ /prompt-*.txt not excluded', 'a second init writes nothing');
+  fs.writeFileSync(path.join(dir, 'handoff.md'), 'notes\n');
+  fs.writeFileSync(path.join(dir, '4-note.md'), 'NOTE a note\n');
+  assert.deepEqual(readStore(cwd).items.map((i) => i.file), ['4-note.md']);
+  assert.match(fails('prompt', 'cols', '--ask', 'show the bar', '--done', 'rows show it'), /kind '' is not one of/);
+  assert.equal(run('prompt', 'cols', '--kind', 'implement', '--ask', 'show the bar', '--done', 'rows show it', '--fences', 'web/', '--pointers', '#10600'), 'coordinator/prompt-cols.txt');
+  assert.equal(promptField(fs.readFileSync(path.join(dir, 'prompt-cols.txt'), 'utf8'), 'Done when'), 'rows show it');
+  assert.equal(boardData({ cwd }).prompts.get('cols'), fs.readFileSync(path.join(dir, 'prompt-cols.txt'), 'utf8'), 'boardData carries every prompt file whole');
+  assert.match(fails('prompt', 'cols', '--kind', 'implement', '--ask', 'x', '--done', 'y'), /prompt-cols\.txt exists/);
+  assert.match(fails('prompt', 'other', '--kind', 'implement', '--ask', 'x', '--done', 'y', '--pointers', '#4'), /names item #4/);
+  assert.match(fails('prompt', 'other', '--kind', 'implement', '--ask', 'x'), /Done when is empty/);
+  assert.match(fails('prompt', 'other', '--kind', 'implement', '--ask', 'x', '--done', 'y'), /Fences is empty/);
+  assert.match(fails('retire', 'a/../../victim', 'why'), /is not lower-case letters/);
+  assert.match(fails('retire', 'ghost', 'why'), /no lane named ghost/);
+  assert.match(fails('new', 'HOLD', 'cols'), /a HOLD waits on --after lanes/);
+  assert.match(fails('ok', 'cols', 'abc'), /cols is not_found, nothing to verify yet/);
+  assert.match(fails('ok', 'nope', 'abc'), /no prompt-nope\.txt/);
+  const first = run('delta');
+  assert.match(first, /^board \d\d:\d\d:\d\d · first · you 1 · live 0 · mine 1$/);
+  assert.match(fs.readFileSync(path.join(dir, 'board.txt'), 'utf8'), /^board lane-cli-\S+ \d{4}-\d\d-\d\d \d\d:\d\d:\d\d\nRUN     prompt-cols\.txt  implement  rows show it\nMINE    #4  a note\nCTX /);
+  assert.match(run('delta'), /· no change · you 1 · live 0 · mine 1$/);
+  const retired = run('retire', 'cols', 'user launched it inline');
+  assert.match(retired, /^OK cols \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ retired: user launched it inline\nremoved coordinator\/prompt-cols\.txt$/);
+  assert.ok(!fs.existsSync(path.join(dir, 'prompt-cols.txt')));
+  assert.match(fails('prompt', 'cols', '--kind', 'implement', '--ask', 'x', '--done', 'y'), /cols already has an OK/);
+  assert.match(run('delta'), /· -RUN prompt-cols\.txt implement rows show it · you 0 · live 0 · mine 1$/);
+  assert.equal(run('live'), 'no launched lane');
+  assert.deepEqual(readStore(cwd).items.map((i) => i.file), ['4-note.md'], 'board.txt and lanes.txt are not items');
+  fs.rmSync(cwd, { recursive: true });
+});
+
+test('snooze: a date after today hides the row and CTX counts it; today or yesterday shows it again; delta reports the vanish and the return; snooze Nd sets the date and logs the why; a bad date is a fault', () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-snooze-'));
+  const dir = path.join(cwd, 'coordinator');
+  const run = (...a) => execFileSync(process.execPath, [path.join(HERE, 'lane.mjs'), ...a, '--cwd', cwd], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: HERMETIC }).trim();
+  const fails = (...a) => {
+    try {
+      run(...a);
+    } catch (e) {
+      return `${e.stdout}${e.stderr}`.trim();
+    }
+    throw new Error(`expected failure: ${a.join(' ')}`);
+  };
+  const day = (n) => {
+    const d = new Date();
+    d.setDate(d.getDate() + n);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+  run('init');
+  fs.writeFileSync(path.join(dir, '1-ship.md'), 'DECIDE ship it?\n');
+  fs.writeFileSync(path.join(dir, '2-note.md'), 'NOTE a note\n');
+  const row = 'DECIDE  #1  ship it?';
+  assert.match(run('delta'), /· first · you 1 · live 0 · mine 1$/);
+  assert.equal(run('set', '1', 'snooze', day(1)), `coordinator/1-ship.md: snooze: ${day(1)}`);
+  let board = run('board').split('\n');
+  assert.ok(!board.includes(row), 'tomorrow hides the row');
+  assert.match(board.at(-1), /^CTX {5}coordinator \S+ {2}\S+: 0 lanes {2}items 1 {2}snoozed 1(?: {2}|$)/, 'CTX counts it; a live watch or coordinator may follow');
+  assert.match(run('delta'), /· -DECIDE #1 ship it\? · you 0 · live 0 · mine 1$/, 'the vanish is a delta row');
+  run('set', '1', 'snooze', day(-1));
+  board = run('board').split('\n');
+  assert.ok(board.includes(row), 'yesterday shows it again');
+  assert.match(board.at(-1), /^CTX {5}coordinator \S+ {2}\S+: 0 lanes {2}items 2(?: {2}|$)/);
+  assert.ok(!board.at(-1).includes('snoozed'));
+  assert.match(run('delta'), /· \+DECIDE #1 ship it\? · you 1 · live 0 · mine 1$/, 'the return is a delta row, not a woke line');
+  assert.match(run('snooze', '1', '3d', 'waiting on legal'), new RegExp(`^coordinator/1-ship\\.md: snooze: ${day(3)}\\nsnoozed \\d\\d:\\d\\d until ${day(3)}: waiting on legal$`));
+  assert.match(fs.readFileSync(path.join(dir, '1-ship.md'), 'utf8'), new RegExp(`^DECIDE ship it\\?\\nsnooze: ${day(3)}\\n\\nsnoozed \\d\\d:\\d\\d until ${day(3)}: waiting on legal\\n$`));
+  assert.ok(!run('board').split('\n').includes(row));
+  assert.equal(run('snooze', '1', '0d'), `coordinator/1-ship.md: snooze: ${day(0)}`, '0d writes today and no body line');
+  assert.ok(run('board').split('\n').includes(row), 'today is awake');
+  assert.equal(run('check'), '', 'a snoozed item is neither a fault nor satisfied');
+  assert.match(fails('set', '2', 'snooze', 'next week'), /set: #2 snooze: 'next week' is not a date YYYY-MM-DD/);
+  fs.writeFileSync(path.join(dir, '2-note.md'), 'NOTE a note\nsnooze: 2026-13-01\n');
+  assert.match(fails('check'), /^BAD {5}#2 snooze: '2026-13-01' is not a date YYYY-MM-DD$/m);
+  fs.rmSync(cwd, { recursive: true });
+});
+
+test('the effort flow on the CLI: new EFFORT, scout, set size and path, prompt --effort --from writes the lane onto the effort, the sizing refusals, relay, did, sync through gh, init --hook', () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-effort-'));
+  const dir = path.join(cwd, 'coordinator');
+  const bin = path.join(cwd, 'bin');
+  fs.mkdirSync(bin);
+  // a gh that answers the issues endpoint from a file, so sync runs end to end
+  fs.writeFileSync(path.join(bin, 'gh'), `#!/bin/sh\nn=$(echo "$2" | sed 's|.*/||')\ncat "${cwd}/gh-$n.json"\n`, { mode: 0o755 });
+  fs.writeFileSync(path.join(cwd, 'gh-14.json'), '{"number":14,"state":"open","title":"slot key naming","closed_at":null,"merged_at":null,"pr":false}\n');
+  const env = { ...HERMETIC, PATH: `${bin}:${process.env.PATH}` };
+  const run = (...a) => execFileSync(process.execPath, [path.join(HERE, 'lane.mjs'), ...a, '--cwd', cwd], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env }).trim();
+  const fails = (...a) => {
+    try {
+      run(...a);
+    } catch (e) {
+      return String(e.stderr).trim();
+    }
+    throw new Error(`expected failure: ${a.join(' ')}`);
+  };
+  run('init');
+  assert.equal(run('init', '--hook'), HOOK_JSON);
+  assert.equal(run('new', 'EFFORT', 'legend', 'Reserved should read Requested', '--on', 'issue 14', '--source', 'user 09:57'), 'coordinator/1-legend.md');
+  assert.match(fails('new', 'EFFORT'), /EFFORT needs a name/);
+  assert.match(run('scout', 'legend'), /^Read-only; edit nothing\. Repo .*\. Effort legend: Reserved should read Requested/);
+  assert.match(fails('scout', 'nope'), /no open EFFORT nope/);
+  assert.match(run('board'), /EFFORT  legend  scoping: scout, then the card  #1/);
+  assert.match(run('delta'), /· first · you 0 · efforts 1 · live 0 · mine 0$/);
+  assert.equal(run('set', 'legend', 'size', 'M'), 'coordinator/1-legend.md: size: M');
+  assert.match(fails('set', 'legend', 'size', 'XL'), /size: 'XL' is not S, M or L/);
+  assert.match(fails('set', '1', 'colour', 'red'), /key is one of/);
+  assert.match(fails('prompt', 'leg-research', '--kind', 'research', '--effort', 'legend', '--ask', 'a', '--done', 'd'), /effort legend has no path: rule the card first/);
+  assert.equal(run('set', '#1', 'path', 'research implement'), 'coordinator/1-legend.md: path: research implement');
+  assert.match(fails('prompt', 'leg-proto', '--kind', 'prototype', '--effort', 'legend', '--ask', 'a', '--done', 'd'), /kind prototype is not on the path of legend/);
+  assert.match(fails('prompt', 'leg-build', '--kind', 'implement', '--effort', 'legend', '--ask', 'a', '--done', 'd'), /an M effort's implement lane needs --gate/);
+  fs.writeFileSync(path.join(cwd, 'draft.md'), '# draft\n\nAsk: read the legend\n  and its consumers\nDone when: the card names the word\nFences: read-only\n');
+  assert.equal(run('prompt', 'leg-research', '--kind', 'research', '--effort', 'legend', '--from', 'draft.md', '--pointers', 'gh issue view 14'), 'coordinator/prompt-leg-research.txt\ncoordinator/1-legend.md: lanes: research=leg-research');
+  const text = fs.readFileSync(path.join(dir, 'prompt-leg-research.txt'), 'utf8');
+  assert.equal(promptField(text, 'Ask'), 'read the legend and its consumers');
+  assert.equal(promptField(text, 'Pointers'), 'gh issue view 14', 'a flag wins over the file');
+  assert.equal(promptField(text, 'Effort'), 'legend');
+  assert.match(text, /Claim #14 first/, 'the effort issue reaches the protocol');
+  assert.equal(parseItem('1-legend.md', fs.readFileSync(path.join(dir, '1-legend.md'), 'utf8')).lanes.research, 'leg-research');
+  assert.match(fails('prompt', 'leg-research-2', '--kind', 'research', '--effort', 'legend', '--ask', 'a', '--done', 'd'), /already has a research lane: leg-research/);
+  assert.match(run('board'), /RUN     prompt-leg-research\.txt  research  the card names the word\n/);
+  assert.match(run('board'), /EFFORT  legend M  leg-research \(research\) run it  #1/);
+  assert.match(fails('relay', 'leg-research', 'go on'), /leg-research is not_found; no session to send to/);
+  assert.match(fails('relay', 'nope', 'go on'), /no prompt-nope\.txt/);
+  assert.match(run('did', 'legend', 'wrote the ruled card into #14'), /^DID legend \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ wrote the ruled card into #14$/);
+  assert.match(fs.readFileSync(path.join(dir, 'lanes.txt'), 'utf8'), /^DID legend /m);
+  assert.equal(run('sync'), '#14: open (issue) slot key naming');
+  assert.equal(fs.readFileSync(path.join(dir, 'github.txt'), 'utf8'), 'issue 14 OPEN slot key naming\n');
+  assert.equal(run('sync'), 'github.txt: 1 number, no change');
+  fs.writeFileSync(path.join(cwd, 'gh-14.json'), '{"number":14,"state":"closed","title":"slot key naming","closed_at":"2026-09-09T10:00:00Z","merged_at":null,"pr":false}\n');
+  assert.equal(run('sync'), '#14: open -> closed (issue) slot key naming');
+  assert.equal(fs.readFileSync(path.join(dir, 'github.txt'), 'utf8'), 'issue 14 CLOSED 2026-09-09T10:00:00Z slot key naming\n');
+  assert.deepEqual(readStore(cwd).items.map((i) => i.file), ['1-legend.md'], 'github.txt is not an item');
+  assert.match(fails('new', 'EFFORT', 'legend', 'again'), /legend is already EFFORT #1/);
+  assert.match(fails('new', 'NOTE', 'n', '--size', 'X'), /size: 'X' is not S, M or L/);
+  assert.deepEqual(readStore(cwd).items.map((i) => i.file), ['1-legend.md'], 'a faulty item is refused, not written');
+  assert.match(fails('did', 'ghost', 'x'), /no open EFFORT named ghost/);
+  assert.match(run('retire', 'leg-research', 'exited'), /removed coordinator\/prompt-leg-research\.txt\ncoordinator\/1-legend\.md: lanes: none$/);
+  assert.match(run('board'), /EFFORT  legend M  write prompt research  #1/, 'a retired lane leaves the effort where it was');
+  assert.match(run('prompt', 'leg-research-2', '--kind', 'research', '--effort', 'legend', '--ask', 'a', '--done', 'd', '--fences', 'read-only'), /lanes: research=leg-research-2$/);
+  fs.rmSync(cwd, { recursive: true });
+});
+
