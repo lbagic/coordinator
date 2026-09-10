@@ -33,7 +33,8 @@ comment block at the top of [lane.mjs](lane.mjs), pinned by the tests.
   the fences of one block are disjoint — a shared path holds a prompt back, a bare file
   name two prompts happen to mention does not. Nothing launches by itself.
 - `lane.mjs board` prints the ledger grouped by who acts next; `page.mjs --serve` renders
-  it as a local web page.
+  it as a local web page. A gated lane that stopped at its gate is shown as waiting on
+  your build word, never as a session to close.
 
 ## Requirements
 

@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { exited, launchBlock, EXIT_GRACE_MS, promptField, promptFaults, buildPrompt, deltaLine, latestTime, GOALS_TEMPLATE, analyze, findPrompt, nameOf, ctxTokens, windowFromModel, modelFromArgv, argsRe, render, newer, parseBoardLines, parseItem, foldStore, readStore, boardRows, nextId, mintItem, slugOf, isCoordinatorSession, question, askLine, boardData, labelFaults, parseNotify, NotifyTail, renderNotify, parseGithub, githubLine, reportPr, effortFaults, parseFields, protocolOf, setHeaderKey, scoutPrompt, HOOK_JSON, githubRefs, syncGithub, whoRows, relayText, FIELD_MAX, LANE_KINDS, fenceTokens, fenceOverlap, launchLane, peerText } from './lane.mjs';
+import { exited, launchBlock, EXIT_GRACE_MS, promptField, promptFaults, buildPrompt, deltaLine, latestTime, GOALS_TEMPLATE, analyze, findPrompt, nameOf, ctxTokens, windowFromModel, modelFromArgv, argsRe, render, newer, parseBoardLines, parseItem, foldStore, readStore, boardRows, nextId, mintItem, slugOf, isCoordinatorSession, question, askLine, boardData, labelFaults, parseNotify, NotifyTail, renderNotify, parseGithub, githubLine, reportPr, effortFaults, parseFields, protocolOf, setHeaderKey, scoutPrompt, HOOK_JSON, githubRefs, syncGithub, whoRows, relayText, FIELD_MAX, LANE_KINDS, fenceTokens, fenceOverlap, launchLane, peerText, gateStop } from './lane.mjs';
 
 process.env.TZ = 'UTC';
 
@@ -611,6 +611,40 @@ test('a lane whose prompt file is gone is trusted on its last OK, because the wa
   assert.ok(out.includes('MINE    file: #3'));
   assert.ok(out.includes('MINE    z  write prompt now  #6'));
   assert.ok(out.includes('DONE    1 filed'));
+});
+
+test("a lane stopped at its gate waits on the user's build word: never a session to close, and its effort row says so", () => {
+  const GATE = 'REPORT cell\nwhat: recon and the amendments, no build\ncommits: none\n\nGated. Waiting for a message headed `TO cell` carrying the word build.';
+  const BUILT = 'REPORT cell\nwhat: built\ncommits: abc123 feat(cell): the cell\nopen: none';
+  assert.equal(gateStop(GATE), true);
+  assert.equal(gateStop(BUILT), false);
+  assert.equal(gateStop(`${GATE}\nopen: none`), false, 'the Gate sentence is the last line or the lane moved on');
+  assert.equal(gateStop('Gated. Waiting for the word.'), false, 'the sentence names the word build');
+  const ef = item('1-cells.md', 'EFFORT cells the cells\nsize: M\npath: implement\nlanes: implement=cell\non: issue 9\n');
+  const at = (report, closed) => [lane('cell', 'finished', { closed_at: T(closed), report, session_open: true })];
+  const tagged = (out, tag) => out.filter((l) => l.startsWith(tag));
+  // Verified at its gate: the user owes it a word, so it is on the ANSWER side
+  // and off CLOSE (control-room-home was told to close at 01:57 on 2026-09-09).
+  const waiting = rows(at(GATE, '07:20'), store([ef], 'OK cell 07:20 gate stop verified'));
+  assert.deepEqual(tagged(waiting, 'ANSWER'), ['ANSWER  cell  cell-ses  gated: waiting on your build word']);
+  assert.deepEqual(tagged(waiting, 'CLOSE'), []);
+  assert.match(waiting.find((l) => l.startsWith('EFFORT')), /cells M  cell \(implement\) gated: waiting on your build word  #1$/);
+  // The word relayed: the lane is building again until its next report, and
+  // still not a session to close.
+  const relayed = rows(at(GATE, '07:20'), store([ef], 'OK cell 07:20 gate stop verified\nSENT cell 07:40 recommended: 1 (a); 2 (a). build'));
+  assert.deepEqual(tagged(relayed, 'LIVE'), ['LIVE    cell  cell-ses  building since the build word 07:40']);
+  assert.deepEqual(tagged(relayed, 'ANSWER'), []);
+  assert.deepEqual(tagged(relayed, 'CLOSE'), []);
+  assert.match(relayed.find((l) => l.startsWith('EFFORT')), /cell \(implement\) building since the build word  #1$/);
+  // The build's own report, verified: an ordinary finished lane again.
+  const built = rows(at(BUILT, '07:50'), store([ef], 'OK cell 07:20 gate stop verified\nSENT cell 07:40 build\nOK cell 07:50 abc123 on main'));
+  assert.deepEqual(tagged(built, 'CLOSE'), ['CLOSE   cell (cell-ses)']);
+  assert.deepEqual(tagged(built, 'LIVE'), []);
+  assert.match(built.find((l) => l.startsWith('EFFORT')), /cells M  close out #9: resolution comment, close, gist line  #1$/);
+  // A gate stop nobody has verified yet is still the coordinator's to verify.
+  const unverified = rows(at(GATE, '07:20'), store([ef]));
+  assert.deepEqual(tagged(unverified, 'MINE'), ['MINE    cell  verify report 07:20']);
+  assert.deepEqual(tagged(unverified, 'ANSWER'), []);
 });
 
 test('a HOLD or LANE naming a launched lane, and a blocks: edge to a launched lane, are faults', () => {

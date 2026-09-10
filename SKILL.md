@@ -81,16 +81,17 @@ row and one launch line, `claude -n <name> "$(cat coordinator/prompt-<name>.txt)
 which hands the session its prompt as its first argument so nothing is pasted, then the
 file by path under whatever skill the user chooses; you name none. `L launch` prints that
 block for every RUN row at once, grouped so each block's fences are disjoint, with the
-held ones under `HELD, not now:`. That same line sent to an already-open session with
-`SendMessage` starts the lane there and the tracker adopts it: it is the one peer message
-that adopts, so a lane can be launched without the user typing anything. The route a repo delivers by (worktree and PR, or commits on main) is a Fences line
-taken from `delivery` in goals.md, not a template edit.
+held ones under `HELD, not now:`. Sent to an already-open session with `SendMessage`, that
+same line starts the lane there and the tracker adopts it: it is the one peer message that
+adopts, so a lane needs nothing typed. The route a repo delivers by (worktree and PR, or
+commits on main) is a Fences line taken from `delivery` in goals.md, not a template edit.
 
 ## Sessions and rulings
 
 `L who` maps every launched lane to its session name, tty and state. A ruling, an
 answer or the word build never goes by hand: `L relay <lane> "<the user's line, verbatim>"`,
-then send what it prints with `SendMessage to: <the session it names>`. Quote, never
+then send what it prints with `SendMessage to: <the session it names>`. A lane at its gate
+keeps its session until the word is said. Quote, never
 paraphrase; the decision is the user's. A worker that asks for build through a question
 tool gets the same relay, not an answer in its dialog.
 
@@ -128,8 +129,10 @@ Never a PR, a review, a merge, code.
 ## Output
 
 Board rows, by who acts: BAD (a fault in the store), RUN (a prompt to launch), ANSWER,
-DECIDE, STEP and CLOSE (sessions to close) are the user's; LIVE is nobody's; MINE is the
-coordinator's next act; DONE counts verified lanes; CTX is the session's own context.
+DECIDE, STEP and CLOSE (sessions whose work is done) are the user's; LIVE is nobody's;
+MINE is the coordinator's next act; DONE counts verified lanes; CTX is the session's own
+context. A lane stopped at its gate is never on CLOSE: it is an ANSWER row until the build
+word is relayed, a LIVE row after it, and its effort row says which.
 `L delta` counts them as you, live and mine. A turn that changed the ledger or received
 an event ends with `L delta`: the BAD rows, if any, and one line of what changed. `L board` prints the board whole; `page.mjs
 --serve` renders it. Past 300k context, the first turn with nothing unverified hands

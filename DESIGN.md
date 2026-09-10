@@ -95,7 +95,10 @@ comment, close, gist line), otherwise it prints on the `MINE file:` row.
    `TO <lane>`, logged as `SENT` in lanes.txt; the user pastes nothing. Every template
    carries the address rule: an instruction headed `TO` another lane is not yours, say so
    and stop; and for gated lanes: build arrives as a `TO` message, never ask for it
-   through a question tool. Two of 32 hand-offs were misrouted (two peer names one
+   through a question tool. A lane that stops at its gate ends its report with the Gate
+   sentence, and the board reads it: never a CLOSE row, an ANSWER row until the word is
+   relayed and a LIVE row after, so the session is kept for the word it is waiting on.
+   Two of 32 hand-offs were misrouted (two peer names one
    transposition apart, live seventy seconds apart); one went unnoticed 44 minutes and left a
    lane at its gate for seven and a half hours; one gate broke because the worker asked
    itself through AskUserQuestion.

@@ -106,8 +106,12 @@
 // prints one row with its next act: scouting until it has a size, ruling
 // until it has a path, then along the path: write the next kind's prompt,
 // the lane's own state (run, held, live, answer, verify, re-issue), a
-// verified implement lane whose `pr:` github.txt does not show merged, the
-// close-out of its `on:` issue while open; it closes when nothing is left.
+// verified lane still at its gate, a verified implement lane whose `pr:`
+// github.txt does not show merged, the close-out of its `on:` issue while
+// open; it closes when nothing is left. A lane whose report ends with the
+// Gate sentence stopped at its gate: it prints as waiting on the user's
+// build word (ANSWER), or as building again once a SENT line after its OK
+// carries the word (LIVE), and never on CLOSE, whose sessions are done.
 // A satisfied item prints on the `MINE file:` row until it is moved to
 // `coordinator/closed/`, which the board never reads. An OK is fresh only when
 // <time> is the lane's latest event as its MINE row prints it (`ok` copies it
@@ -1139,6 +1143,15 @@ export function reportPr(report) {
   return n ? Number(n[1] || n[2]) : null;
 }
 
+// A gated implement lane stops at its gate with the Gate sentence as the last
+// line of its report: it has done its recon and waits for the user's build
+// word. Such a lane is never a session to close, however it was verified.
+export function gateStop(report) {
+  const lines = String(report || '').trim().split('\n');
+  const last = (lines[lines.length - 1] || '').trim();
+  return /^Gated\b/i.test(last) && /\bbuild\b/i.test(last);
+}
+
 // Faults in the fields of a prompt to be written: itemIds are the ids in the
 // store, open and closed, which a Pointers token may not name.
 export function promptFaults(name, fields, itemIds = new Set(), opts = {}) {
@@ -1413,6 +1426,32 @@ export function boardRows(results, store, opts = {}) {
     const r = lanes.get(name);
     return r && r.report ? reportPr(r.report) : null;
   };
+  // A lane whose report ends at its gate waits for the user's build word, so
+  // it is never a session to close. The word is a SENT line after the OK that
+  // verified the stop; the ledger is append-only, so order decides, and a
+  // later OK (the report the build returns) clears it.
+  const gated = (name) => {
+    const r = lanes.get(name);
+    return !!r && reported(r) && gateStop(r.report);
+  };
+  const buildSent = (name) => {
+    let ok = false;
+    let sent = null;
+    for (const l of store.lanes) {
+      if (l.name !== name) continue;
+      if (l.tag === 'OK') {
+        ok = true;
+        sent = null;
+      } else if (ok && l.tag === 'SENT' && /\bbuild\b/i.test(l.rest || '')) sent = l;
+    }
+    return sent;
+  };
+  const sentClock = (l) => {
+    const iso = ISO_TOKEN.exec(l.rest);
+    if (iso) return clock(iso[1], now);
+    const m = TIME_TOKEN.exec(l.rest);
+    return m ? m[1] : '';
+  };
   // An effort's next act, walking its path: the first kind with no lane, a
   // lane not yet verified, a verified lane whose PR is not merged, then the
   // close-out of its issue. Done when nothing is left.
@@ -1432,6 +1471,7 @@ export function boardRows(results, store, opts = {}) {
         if (r.status === 'exited') return `${lane} (${kind}) exited, re-issue`;
         return `${lane} (${kind}) verify`;
       }
+      if (gated(lane)) return `${lane} (${kind}) ${buildSent(lane) ? 'building since the build word' : 'gated: waiting on your build word'}`;
       const pr = lanePr(lane);
       if (pr && !ghMerged(pr)) return `${lane} (${kind}) PR #${pr} ${gh(pr) ? gh(pr).state.toLowerCase() : 'open'}, merge is yours`;
     }
@@ -1481,13 +1521,17 @@ export function boardRows(results, store, opts = {}) {
     if (r.status === 'stopped') out.push(row('ANSWER', r.name, peer(r), `asked: ${r.ask || ''}`));
     else if (r.status === 'stalled') out.push(row('ANSWER', r.name, peer(r), `idle ${fmtDur(now - r.mtime)}, no activity`));
     else if (r.status === 'continued' && r.session_open && r.asked && !verified(r.name)) out.push(row('ANSWER', r.name, peer(r), `after report: ${r.ask}`));
+    else if (gated(r.name) && verified(r.name) && !buildSent(r.name)) out.push(row('ANSWER', r.name, peer(r), 'gated: waiting on your build word'));
   }
   for (const it of shown) if (it.kind === 'DECIDE') out.push(row('DECIDE', ref(it), capHead(it.head) + edgeText(it)));
   for (const it of shown) if (it.kind === 'STEP') out.push(row('STEP', ref(it), capHead(it.head) + edgeText(it)));
   for (const it of shown) if (it.kind === 'EFFORT' && it.name) out.push(row('EFFORT', `${it.name}${it.size ? ` ${it.size}` : ''}`, effortNext(it, true), ref(it)));
-  const close = results.filter((r) => verified(r.name) && r.session_open).map((r) => `${r.name} (${peer(r)})`);
+  const close = results.filter((r) => verified(r.name) && r.session_open && !gated(r.name)).map((r) => `${r.name} (${peer(r)})`);
   if (close.length) out.push(row('CLOSE', ...close));
-  for (const r of results) if (r.status === 'in_progress') out.push(row('LIVE', r.name, peer(r), `since ${clock(r.prompt_at, now)}`));
+  for (const r of results) {
+    if (r.status === 'in_progress') out.push(row('LIVE', r.name, peer(r), `since ${clock(r.prompt_at, now)}`));
+    else if (gated(r.name) && verified(r.name) && buildSent(r.name)) out.push(row('LIVE', r.name, peer(r), `building since the build word ${sentClock(buildSent(r.name))}`));
+  }
   for (const r of results) {
     if (r.status === 'exited') out.push(row('MINE', r.name, 'exited without report, re-issue'));
     else if (r.status === 'finished' && !verified(r.name)) out.push(row('MINE', r.name, `verify report ${latest(r)}`));
