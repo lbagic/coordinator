@@ -132,7 +132,8 @@ Board rows, by who acts: BAD (a fault in the store), RUN (a prompt to launch), A
 DECIDE, STEP and CLOSE (sessions whose work is done) are the user's; LIVE is nobody's;
 MINE is the coordinator's next act; DONE counts verified lanes; CTX is the session's own
 context. A lane stopped at its gate is never on CLOSE: it is an ANSWER row until the build
-word is relayed, a LIVE row after it, and its effort row says which.
+word is relayed, a LIVE row after it, and its effort row says which. The gate template
+tells the worker to end its report with that Gate sentence; the board reads it.
 `L delta` counts them as you, live and mine. A turn that changed the ledger or received
 an event ends with `L delta`: the BAD rows, if any, and one line of what changed. `L board` prints the board whole; `page.mjs
 --serve` renders it. Past 300k context, the first turn with nothing unverified hands

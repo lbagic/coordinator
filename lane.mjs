@@ -1260,7 +1260,7 @@ export function protocolOf(name, opts = {}) {
       return [
         `Protocol (implement): deliver the way the Fences say this repo works: a worktree and a PR babysat to CI green with every review-bot thread answered, or commits on main with the issue number in the subject; the Fences name the base and the route. Do your own recon; one concern per PR or commit; checks scoped to the diff, run by you, their evidence quoted. You never merge and never push: that is the user's.`,
         ...(ticket ? [`Ticket ${ticket}: claim it first (assign yourself), verify its text against origin/main, post amendments or "none" as a comment. After the user says merged: resolution comment, close, gist line on its map.`] : []),
-        ...(opts.gate ? [`Gate: after the amendments, stop and wait. Build only on a message headed \`TO ${name}\` that carries the word build. Never ask for it through a question tool; the wait is the point.`] : []),
+        ...(opts.gate ? [`Gate: after the amendments, stop and wait. Build only on a message headed \`TO ${name}\` that carries the word build. Never ask for it through a question tool; the wait is the point. End the report with the line "Gated. Waiting for a message headed TO ${name} carrying the word build." and nothing after it: that line is what keeps your session open on the board.`] : []),
       ].join('\n');
     case 'alternative':
       return `Protocol (alternative, on your own): make the case for a different approach to the same question, against the one on the table: what it changes, what it costs, the evidence behind each claim, in at most 40 lines. A throwaway spike is allowed in your own worktree, never pushed, never a PR. ${where('Post the case')}. Decide nothing; the user picks.`;

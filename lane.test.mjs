@@ -419,6 +419,10 @@ test('every kind has a protocol and its own REPORT keys; the gate, the runner, t
   assert.equal(gated.split('\n')[2], 'Effort: cells');
   assert.match(gated, /Ticket #10685: claim it first/);
   assert.match(gated, /Gate: after the amendments, stop and wait\. Build only on a message headed `TO cell` that carries the word build\. Never ask for it through a question tool/);
+  // The board reads that closing line, so the template dictates it.
+  const sentence = 'Gated. Waiting for a message headed TO cell carrying the word build.';
+  assert.ok(gated.includes(`End the report with the line "${sentence}" and nothing after it`), gated);
+  assert.equal(gateStop(`REPORT cell\nwhat: recon\n\n${sentence}`), true);
   const runner = buildPrompt('probe', { ask: 'a', done: 'd' }, { kind: 'research', runner: true });
   assert.equal(runner.split('\n')[1], 'Kind: research runner');
   assert.match(runner, /Production reads go through a runner: .* the user runs it with ! in this session and tees the output to a file with no credentials in it/);
