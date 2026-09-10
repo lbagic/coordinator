@@ -73,6 +73,8 @@ comment, close, gist line), otherwise it prints on the `MINE file:` row.
 5. **The RUN row names the kind and the gate, never a skill.** The launch is
    `claude -n <name> "$(cat coordinator/prompt-<name>.txt)"`, the prompt handed over as
    the session's first argument so nothing is pasted and the prompt bar shows the lane.
+   The line is also the one thing a peer message may carry that adopts a lane, so the
+   coordinator can start one by `SendMessage` instead of the user typing it.
    Prompt files live in the store beside the items; one at the repository root, where
    earlier ledgers put them, is still read.
 

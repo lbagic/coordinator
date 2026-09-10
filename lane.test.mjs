@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { exited, launchBlock, EXIT_GRACE_MS, promptField, promptFaults, buildPrompt, deltaLine, latestTime, GOALS_TEMPLATE, analyze, findPrompt, nameOf, ctxTokens, windowFromModel, modelFromArgv, argsRe, render, newer, parseBoardLines, parseItem, foldStore, readStore, boardRows, nextId, mintItem, slugOf, isCoordinatorSession, question, askLine, boardData, labelFaults, parseNotify, NotifyTail, renderNotify, parseGithub, githubLine, reportPr, effortFaults, parseFields, protocolOf, setHeaderKey, scoutPrompt, HOOK_JSON, githubRefs, syncGithub, whoRows, relayText, FIELD_MAX, LANE_KINDS, fenceTokens, fenceOverlap } from './lane.mjs';
+import { exited, launchBlock, EXIT_GRACE_MS, promptField, promptFaults, buildPrompt, deltaLine, latestTime, GOALS_TEMPLATE, analyze, findPrompt, nameOf, ctxTokens, windowFromModel, modelFromArgv, argsRe, render, newer, parseBoardLines, parseItem, foldStore, readStore, boardRows, nextId, mintItem, slugOf, isCoordinatorSession, question, askLine, boardData, labelFaults, parseNotify, NotifyTail, renderNotify, parseGithub, githubLine, reportPr, effortFaults, parseFields, protocolOf, setHeaderKey, scoutPrompt, HOOK_JSON, githubRefs, syncGithub, whoRows, relayText, FIELD_MAX, LANE_KINDS, fenceTokens, fenceOverlap, launchLane, peerText } from './lane.mjs';
 
 process.env.TZ = 'UTC';
 
@@ -49,6 +49,34 @@ test('a pasted prompt adopts; the writer, a cat, a notification, a peer, a skill
   assert.equal(findPrompt([user(PROMPT, { origin: { kind: 'peer' } })], NAME), -1);
   assert.equal(findPrompt([user(PROMPT, { isMeta: true })], NAME), -1);
   assert.equal(findPrompt([user(PROMPT, { isSidechain: true })], NAME), -1);
+});
+
+// The record shape is the relay of 2026-09-10T00:19:32Z into session 7d82b90f:
+// a `user` record with isMeta, origin.kind 'peer', the body in origin.body and
+// wrapped in the <cross-session-message> text the session reads.
+const peer = (body) => user(
+  `Another Claude session sent a message:\n<cross-session-message from="uds:/tmp/cc-socks/35179.sock" from-name="nightshift-f0" from-mode="prompting">\n${body}\n</cross-session-message>\n\nThis came from another Claude session.`,
+  { isMeta: true, origin: { kind: 'peer', from: 'uds:/tmp/cc-socks/35179.sock', name: 'nightshift-f0', body } },
+);
+
+test('a peer message adopts through the argv launch line and nothing else; one for another lane ends the span', () => {
+  const launch = `claude -n ${NAME} "$(cat coordinator/prompt-${NAME}.txt)"`;
+  assert.equal(launchLane(launch), NAME);
+  assert.equal(findPrompt([peer(launch)], NAME), 0);
+  assert.equal(findPrompt([peer(`claude -n ${NAME} "$(cat prompt-${NAME}.txt)"`)], NAME), 0, 'the bare-path form');
+  assert.equal(findPrompt([peer(`RUN, one prompt:\n  ${launch}\n`)], NAME), 0, 'inside the launch block');
+  assert.equal(findPrompt([user(`x\n${launch}\n`, { isMeta: true, origin: { kind: 'peer' } })], NAME), 0, 'no origin.body: the wrapped text');
+  assert.equal(findPrompt([peer(`TO ${NAME}\nRULED 02:19 by the user: build`)], NAME), -1, 'a relay is talk');
+  assert.equal(findPrompt([peer(PROMPT)], NAME), -1, 'the prompt text pasted by a peer');
+  assert.equal(findPrompt([peer(`follow prompt-${NAME}.txt`), toolResult(PROMPT)], NAME), -1, 'the file named without the launch line');
+  assert.equal(findPrompt([peer(`claude -n other "$(cat coordinator/prompt-${NAME}.txt)"`)], NAME), -1, 'the two names must agree');
+  assert.equal(findPrompt([peer(`claude -n ${NAME} "$(cat coordinator/prompt-other.txt)"`)], NAME), -1);
+  assert.equal(findPrompt([peer(launch), human(`TASK ${NAME}\nbody`)], NAME), 1, 'the last adopting record still wins');
+  assert.equal(peerText(human(launch)), '', 'a typed message is not a peer message');
+  const closes = assistant(`REPORT ${NAME}\nwhat: done`, 'end_turn');
+  assert.equal(analyze([human(PROMPT), closes], NAME).status, 'finished');
+  assert.equal(analyze([human(PROMPT), peer(`claude -n other-lane "$(cat coordinator/prompt-other-lane.txt)"`), closes], NAME).status, 'in_progress', 'handed to another lane');
+  assert.equal(analyze([human(PROMPT), peer(`TO ${NAME}\nbuild`), closes], NAME).status, 'finished', 'a relay does not end it');
 });
 
 test('a prompt pasted as a slash command argument adopts', () => {

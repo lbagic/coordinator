@@ -36,12 +36,15 @@
 // `TASK <name>`. Its worker is a session whose transcript holds that TASK line
 // typed by a human (pasted prompt, bare or as a slash command's argument) or
 // inside a tool_result after a typed message naming `prompt-<name>.txt`, bare
-// or as a slash command's argument (the worker read the file). Text inside
-// a Write tool input (the session that wrote the file), a task notification, a
-// peer message, a skill expansion, or a sidechain never adopts, and a session
-// that ran /coordinator never adopts. A typed `TASK <other>` line, or a typed
-// message naming another prompt file, ends the lane's part of the
-// transcript. The worker is finished when an assistant text block after the
+// or as a slash command's argument (the worker read the file), or a peer
+// message carrying the argv launch line `claude -n <name> "$(cat
+// [coordinator/]prompt-<name>.txt)"` with both names the lane's: that is one
+// session launching another. Text inside a Write tool input (the session that
+// wrote the file), a task notification, any other peer message, a skill
+// expansion, or a sidechain never adopts, and a session that ran /coordinator
+// never adopts. A typed `TASK <other>` line, a typed message naming another
+// prompt file, or a peer launch line for another lane, ends the lane's part
+// of the transcript. The worker is finished when an assistant text block after the
 // prompt has a line that is exactly `REPORT <name>`; the last such block is the
 // report. It is continued when a later turn ended after that block, with a
 // user message between the two; a tool result is not a turn boundary, and a
@@ -225,6 +228,17 @@ function commandArgs(text) {
 const ANY_TASK = /^[ \t]*TASK (\S+)[ \t]*$/m;
 const ANY_ARGS = new RegExp(ARGS_HEAD + "([^\\s'\"`),.:;]+)" + ARGS_TAIL, 'm');
 
+// The lane an argv launch line names, or null. `L launch` prints
+// `claude -n <name> "$(cat coordinator/prompt-<name>.txt)"` (older ledgers:
+// the bare path); both names must be the same lane, so a line quoting one
+// name and another lane's file names neither.
+const LAUNCH_RE = /claude -n ([a-z0-9][a-z0-9-]*)\b[^\n]*?\bcat\s+(?:[\w.-]+\/)*prompt-([a-z0-9][a-z0-9-]*)\.txt/;
+
+export function launchLane(text) {
+  const m = LAUNCH_RE.exec(text || '');
+  return m && m[1] === m[2] ? m[1] : null;
+}
+
 // The lane another typed message hands the session to, or null. A prompt file
 // named in the bare text counts, the same widening findPrompt makes: what
 // adopts a lane also releases it.
@@ -271,6 +285,16 @@ export function isHumanUser(r) {
 
 export function humanText(r) {
   return isHumanUser(r) ? blocksText(r.message && r.message.content, 'text') : '';
+}
+
+// The body of a cross-session message, or ''. The record is a `user` record
+// with `isMeta`, `origin.kind` 'peer' and the body both in `origin.body` and
+// wrapped in the `<cross-session-message>` text the session reads.
+export function peerText(r) {
+  if (r.type !== 'user' || r.isSidechain) return '';
+  const o = r.origin;
+  if (!o || o.kind !== 'peer') return '';
+  return typeof o.body === 'string' && o.body ? o.body : blocksText(r.message && r.message.content, 'text');
 }
 
 export function toolResultText(r) {
@@ -331,6 +355,13 @@ export function findPrompt(records, name) {
   const args = argsRe(name);
   let found = -1;
   for (let i = 0; i < records.length; i++) {
+    // A peer adopts only through the launch line: the coordinator starting a
+    // lane in a session it did not open. Every other peer message is talk.
+    const p = peerText(records[i]);
+    if (p) {
+      if (launchLane(p) === name) found = i;
+      continue;
+    }
     const t = humanText(records[i]);
     if (!t) continue;
     const inArgs = commandArgs(t);
@@ -364,6 +395,14 @@ export function analyze(records, name) {
   let lastActive = i;
   let end = records.length;
   for (let j = i + 1; j < end; j++) {
+    const p = peerText(records[j]);
+    if (p) {
+      const l = launchLane(p);
+      if (l && l !== name) {
+        end = j;
+        break;
+      }
+    }
     const h = humanText(records[j]);
     if (h) {
       if (otherLane(h, name)) {

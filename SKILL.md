@@ -79,7 +79,9 @@ row and one launch line, `claude -n <name> "$(cat coordinator/prompt-<name>.txt)
 which hands the session its prompt as its first argument so nothing is pasted, then the
 file by path under whatever skill the user chooses; you name none. `L launch` prints that
 block for every RUN row at once, grouped so each block's fences are disjoint, with the
-held ones under `HELD, not now:`. The route a repo delivers by (worktree and PR, or commits on main) is a Fences line
+held ones under `HELD, not now:`. That same line sent to an already-open session with
+`SendMessage` starts the lane there and the tracker adopts it: it is the one peer message
+that adopts, so a lane can be launched without the user typing anything. The route a repo delivers by (worktree and PR, or commits on main) is a Fences line
 taken from `delivery` in goals.md, not a template edit.
 
 ## Sessions and rulings
