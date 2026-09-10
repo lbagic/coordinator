@@ -817,7 +817,12 @@ test('launch: the RUN rows as `claude -n <name> "$(cat prompt-<name>.txt)"` line
     '  claude -n later     "$(cat prompt-later.txt)"         # held: #1 after docs-map',
   ].join('\n'));
   assert.ok(!/secret ask/.test(out), 'no prompt text');
-  assert.deepEqual(fenceTokens('(`dakr/server/`, web/app/x.tsx.) README.md http://x/y e.g. main origin/main .claude/reviews/ coordinator/12-x.md CLAUDE.md'), ['dakr/server/', 'web/app/x.tsx', 'README.md']);
+  assert.deepEqual(fenceTokens('(`dakr/server/`, web/app/x.tsx.) README.md http://x/y e.g. main origin/main .claude/reviews/ coordinator/12-x.md CLAUDE.md'), ['dakr/server/', 'web/app/x.tsx']);
+  // A bare file name names no place in the tree: two prompts that both mention
+  // one are not overlapping. Five false holds on 2026-09-09 were these.
+  assert.deepEqual(fenceTokens('not nightshift.yml; prompt-*.txt is never committed; no lane REPORT.md but your own; worktrees.ts is settled-counter\'s'), []);
+  assert.equal(fenceOverlap(fenceTokens('daemon/src/ only, not nightshift.yml'), fenceTokens('dashboard/src/ only, not nightshift.yml')), null);
+  assert.equal(fenceOverlap(fenceTokens('daemon/src/picks.ts, REPORT.md'), fenceTokens('daemon/src/picks.ts, REPORT.md')), 'daemon/src/picks.ts', 'a path still holds');
   assert.equal(fenceOverlap(['web/components/'], ['web/components/CostOverviewCard.tsx']), 'web/components/');
   assert.equal(fenceOverlap(['web/'], ['web/app/x.tsx']), null, 'a top-level directory claims nothing below it');
   assert.equal(fenceOverlap(['dakr/'], ['dakr/']), null, 'a whole top-level tree is boilerplate-grade, even shared exactly');

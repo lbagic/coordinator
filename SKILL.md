@@ -72,7 +72,9 @@ citation, an item id in Pointers, a reused name, a kind off the effort's path, a
 an S effort, an M implement without one. Ask and Done when in the user's words (their
 claim quoted as theirs). Fences in paths: what live lanes hold (`L live`), the base ref,
 the worktree, what is out. Pointers: issues, URLs, documents the user wrote. The worker
-does its own recon. Prompts go out together only when their fences are disjoint. A name
+does its own recon. Prompts go out together only when their fences are disjoint: two
+fences meet on a path both name, never on a bare file name (`nightshift.yml`, a
+`REPORT.md`) or a whole top-level tree, which claim no place between them. A name
 is never reused and a launched file is never edited: `L retire <old> <why>`, then a fresh
 name. The file is the hand-off, never a paste: you print no prompt text, only the RUN
 row and one launch line, `claude -n <name> "$(cat coordinator/prompt-<name>.txt)"` in the repo,

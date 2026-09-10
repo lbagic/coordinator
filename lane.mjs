@@ -2225,14 +2225,16 @@ function liveCommand(args) {
 // worktree and review roots, the rules, the ledger.
 const FENCE_NOISE = new Set(['origin/main', 'main', '.claude/worktrees', '.claude/worktrees/', '.claude/reviews', '.claude/reviews/', '.claude/rules/', 'coordinator/', 'CLAUDE.md', 'goals.md']);
 
-// The path-like tokens of a Fences line: anything with a `/` or a file
-// extension, quotes and trailing punctuation stripped, URLs and the noise
-// skipped.
+// The path-like tokens of a Fences line: anything with a directory segment,
+// quotes and trailing punctuation stripped, URLs and the noise skipped. A bare
+// file name (`nightshift.yml`, `REPORT.md`, `prompt-*.txt`) names no place in
+// the tree, so two prompts that both mention one are not overlapping; the same
+// reason fenceOverlap discards a single-segment directory.
 export function fenceTokens(fences) {
   const out = [];
   for (const raw of (fences || '').split(/\s+/)) {
     const t = raw.replace(/^[`'"([{<]+/, '').replace(/[`'"),\]}>;:.]+$/, '').replace(/^\.\//, '');
-    if (!t || /^http/i.test(t) || FENCE_NOISE.has(t) || t.startsWith('coordinator/') || !(t.includes('/') || /^.{2,}\.[a-z][a-z0-9]{0,5}$/i.test(t))) continue;
+    if (!t || /^http/i.test(t) || FENCE_NOISE.has(t) || t.startsWith('coordinator/') || !t.includes('/')) continue;
     if (!out.includes(t)) out.push(t);
   }
   return out;

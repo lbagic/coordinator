@@ -30,7 +30,8 @@ comment block at the top of [lane.mjs](lane.mjs), pinned by the tests.
 - Items can name a PR or issue (`on: pr N`, `until: merged N`) and close themselves when
   GitHub says so. `lane.mjs watch` polls GitHub once a minute.
 - `lane.mjs launch` prints the launch line for every prompt not yet picked up, grouped so
-  the fences of one block are disjoint. Nothing launches by itself.
+  the fences of one block are disjoint — a shared path holds a prompt back, a bare file
+  name two prompts happen to mention does not. Nothing launches by itself.
 - `lane.mjs board` prints the ledger grouped by who acts next; `page.mjs --serve` renders
   it as a local web page.
 
