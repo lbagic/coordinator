@@ -425,6 +425,14 @@ test('every kind has a protocol and its own REPORT keys; the gate, the runner, t
   assert.match(runner, /Two passes are normal/);
   assert.doesNotMatch(buildPrompt('probe', { ask: 'a', done: 'd' }, { kind: 'research' }), /runner/);
   assert.match(buildPrompt('r', { ask: 'a', done: 'd' }, { kind: 'research', ticket: 7 }), /Claim #7 first/);
+  // The effort's issue outlives its first lane: the research leg of a
+  // `research implement` path answers on the issue and leaves it open (issue 4
+  // was closed by lineage-research on 2026-09-09 and reopened by hand).
+  assert.match(buildPrompt('r', { ask: 'a', done: 'd' }, { kind: 'research', ticket: 4 }), /the answer is its resolution comment, then close it and add the gist line on its map\./);
+  const later = buildPrompt('r', { ask: 'a', done: 'd' }, { kind: 'research', ticket: 4, later: true });
+  assert.match(later, /the answer is its resolution comment and the gist line on its map\. Leave #4 open: a later lane of this effort closes it, not you\./);
+  assert.doesNotMatch(later, /close it and add/);
+  assert.doesNotMatch(buildPrompt('r', { ask: 'a', done: 'd' }, { kind: 'research', later: true }), /Leave/, 'no ticket, nothing to leave open');
   assert.match(buildPrompt('f', { ask: 'a', done: 'd' }, { kind: 'implement', force: true }).split('\n')[1], /^Kind: implement forced$/);
   assert.equal(protocolOf('x', { kind: 'nope' }), '');
   const plain = buildPrompt('old', { ask: 'a', done: 'd' });
@@ -1006,6 +1014,7 @@ test('the effort flow on the CLI: new EFFORT, scout, set size and path, prompt -
   assert.equal(promptField(text, 'Pointers'), 'gh issue view 14', 'a flag wins over the file');
   assert.equal(promptField(text, 'Effort'), 'legend');
   assert.match(text, /Claim #14 first/, 'the effort issue reaches the protocol');
+  assert.match(text, /Leave #14 open: a later lane of this effort closes it, not you\./, 'implement still follows on the path');
   assert.equal(parseItem('1-legend.md', fs.readFileSync(path.join(dir, '1-legend.md'), 'utf8')).lanes.research, 'leg-research');
   assert.match(fails('prompt', 'leg-research-2', '--kind', 'research', '--effort', 'legend', '--ask', 'a', '--done', 'd'), /already has a research lane: leg-research/);
   assert.match(run('board'), /RUN     prompt-leg-research\.txt  research  the card names the word\n/);

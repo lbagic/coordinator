@@ -1227,14 +1227,16 @@ const REPORT_KEYS = {
 };
 
 // The protocol paragraph of a kind: the standing fences and the acts the
-// worker owes, the same under any skill or none.
+// worker owes, the same under any skill or none. `opts.later` says the
+// effort's path has a leg after this one, so a kind that would close the
+// effort's issue leaves it open instead: the issue outlives its first lane.
 export function protocolOf(name, opts = {}) {
   const ticket = opts.ticket ? `#${opts.ticket}` : null;
   const where = (what) => (ticket ? `${what} on ${ticket}` : `${what} where the Done when says`);
   switch (opts.kind) {
     case 'research':
       return [
-        `Protocol (research, on your own): answer the question from primary sources, the repo, the docs, the data, and say where each claim was read. Read-only: no code, no worktree, no PR, no test files. ${ticket ? `Claim ${ticket} first (assign yourself); the answer is its resolution comment, then close it and add the gist line on its map.` : 'Write the findings where the Done when says.'} Name follow-up work in the REPORT; create nothing.`,
+        `Protocol (research, on your own): answer the question from primary sources, the repo, the docs, the data, and say where each claim was read. Read-only: no code, no worktree, no PR, no test files. ${ticket ? `Claim ${ticket} first (assign yourself); ${opts.later ? `the answer is its resolution comment and the gist line on its map. Leave ${ticket} open: a later lane of this effort closes it, not you.` : `the answer is its resolution comment, then close it and add the gist line on its map.`}` : 'Write the findings where the Done when says.'} Name follow-up work in the REPORT; create nothing.`,
         ...(opts.runner ? ['Production reads go through a runner: write a non-interactive read-only script in your scratchpad and print the command; the user runs it with ! in this session and tees the output to a file with no credentials in it; you read the file. Confirm the target before every connection; SELECT and EXPLAIN only. Two passes are normal.'] : []),
       ].join('\n');
     case 'scoping':
@@ -2120,6 +2122,8 @@ function promptCommand(args) {
     effort = store.items.find((i) => i.kind === 'EFFORT' && i.name === opts.effort) || null;
     faults.push(...effortFaults(effort, opts));
     if (effort && effort.on && effort.on.type === 'issue') opts.ticket = effort.on.n;
+    const leg = effort ? effort.path.indexOf(opts.kind) : -1;
+    opts.later = leg >= 0 && leg < effort.path.length - 1;
   }
   const file = path.join(dir, `prompt-${name}.txt`);
   if (name && [file, path.join(cwd, `prompt-${name}.txt`)].some((f) => fs.existsSync(f))) faults.push(`prompt-${name}.txt exists; a launched file is never edited, so pick a new name`);

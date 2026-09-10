@@ -66,7 +66,9 @@ comment, close, gist line), otherwise it prints on the `MINE file:` row.
    reference in a few thousand characters), and workers read tickets whatever the launch skill. S
    efforts get no issue; the prompt is enough (the last morning's three S lanes).
    The coordinator writes the issue from the ruled card; the user reviews it before the
-   first lane. Local kinds stay local: DECIDE answers arrived in chat (17) or inside
+   first lane. One issue spans the whole effort, so the lane that closes it is the one on
+   the path's last leg: a research leg followed by an implement leg answers on the issue
+   and leaves it open (issue 4 was closed by the research lane and reopened by hand). Local kinds stay local: DECIDE answers arrived in chat (17) or inside
    worker sessions (12), never on GitHub; STEP, NOTE, HOLD, LANE are the coordinator's
    own bookkeeping. IDEA takes `on: issue N` when it is repo work, so it closes itself
    (one IDEA went stale because nothing reconciled it).
