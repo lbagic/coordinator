@@ -28,7 +28,7 @@
 //   lane.mjs show <id|lane> [--cwd DIR]           one item in full, or every open item naming a lane
 //   lane.mjs new KIND [name] <headline…> [--after "a b"] [--blocks "x"] [--until "ok x"] [--on "issue N"] [--size S] [--path "…"] [--source S] [--body T]
 //   lane.mjs file <id> [--cwd DIR]                move an item to coordinator/closed/
-//   lane.mjs ctx [--session ID]                   context of the calling session: `ctx 180K/1M`
+//   lane.mjs ctx [--session ID]                   context of the calling session: `ctx 180K/1M`; silent, exit 0, until its transcript holds a usage record
 //   every command but ctx takes --cwd DIR (default: the current directory) and --store DIR (default: <cwd>/coordinator)
 //
 // A lane is a file `prompt-<name>.txt` under `coordinator/` (older ledgers: at
@@ -1989,16 +1989,12 @@ function ctxCommand(args) {
   }
   const entry = readRegistry().find((e) => e.sessionId === sid) || null;
   const file = findTranscript(sid, entry ? entry.cwd : process.cwd());
-  if (!file) {
-    console.error(`ctx: no transcript for ${sid}`);
-    return 1;
-  }
+  // Claude Code writes the transcript only once the first prompt is in, so
+  // a hook on that prompt runs before it exists: nothing to report, not a fault.
+  if (!file) return 0;
   const records = parseLines(fs.readFileSync(file, 'utf8'));
   const n = ctxTokens(records);
-  if (n == null) {
-    console.error(`ctx: no usage records in ${path.basename(file)}`);
-    return 1;
-  }
+  if (n == null) return 0;
   console.log(`ctx ${short(n)}/${short(ctxWindow(records, entry))}`);
   return 0;
 }
@@ -2321,7 +2317,7 @@ const USAGE = [
   '       lane.mjs show <id|lane> [--cwd DIR]',
   '       lane.mjs new KIND [name] <headline…> [--after "a b"] [--blocks "x"] [--until "ok x"] [--on "issue N"] [--size S] [--path "…"] [--source S] [--body T]',
   '       lane.mjs file <id> [--cwd DIR]',
-  '       lane.mjs ctx [--session ID]',
+  '       lane.mjs ctx [--session ID]                     prints nothing until the session has a transcript with usage',
   'every command but ctx takes --cwd DIR (default: the current directory) and --store DIR (default: <cwd>/coordinator)',
 ].join('\n');
 

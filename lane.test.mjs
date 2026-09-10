@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { exited, launchBlock, EXIT_GRACE_MS, promptField, promptFaults, buildPrompt, deltaLine, latestTime, GOALS_TEMPLATE, analyze, findPrompt, nameOf, ctxTokens, windowFromModel, modelFromArgv, argsRe, render, newer, parseBoardLines, parseItem, foldStore, readStore, boardRows, nextId, mintItem, slugOf, isCoordinatorSession, question, askLine, boardData, labelFaults, parseNotify, NotifyTail, renderNotify, parseGithub, githubLine, reportPr, effortFaults, parseFields, protocolOf, setHeaderKey, scoutPrompt, HOOK_JSON, githubRefs, syncGithub, whoRows, relayText, FIELD_MAX, LANE_KINDS, fenceTokens, fenceOverlap } from './lane.mjs';
 
 process.env.TZ = 'UTC';
@@ -722,6 +722,26 @@ test('ctx sums the statusline set of usage fields from the last assistant record
   ];
   assert.equal(ctxTokens(recs), 100);
   assert.equal(ctxTokens([{ type: 'user', message: { content: 'x' } }]), null);
+});
+
+test('ctx is silent and exits 0 before the session has a transcript with usage; then it prints the line', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-ctx-home-'));
+  const env = { ...process.env, HOME: home, CLAUDE_CODE_SESSION_ID: '' };
+  const ctx = (sid) => spawnSync(process.execPath, [path.join(HERE, 'lane.mjs'), 'ctx', '--session', sid], { encoding: 'utf8', env });
+  try {
+    const fresh = ctx('05ead7fc-0000-4000-8000-000000000000');
+    assert.deepEqual([fresh.status, fresh.stdout, fresh.stderr], [0, '', ''], 'no transcript yet: the first-prompt hook must not fail');
+    const dir = path.join(home, '.claude', 'projects', '-repo');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'young.jsonl'), `${JSON.stringify({ type: 'user', message: { content: 'hi' } })}\n`);
+    const young = ctx('young');
+    assert.deepEqual([young.status, young.stdout, young.stderr], [0, '', ''], 'transcript without an assistant turn: still nothing to report');
+    fs.appendFileSync(path.join(dir, 'young.jsonl'), `${JSON.stringify({ type: 'assistant', message: { usage: { input_tokens: 10000, output_tokens: 20000, cache_read_input_tokens: 30000, cache_creation_input_tokens: 40000 } } })}\n`);
+    const grown = ctx('young');
+    assert.deepEqual([grown.status, grown.stdout.trim()], [0, 'ctx 100K/1M']);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
 });
 
 test('the window comes from the model id, and the model id from argv', () => {
