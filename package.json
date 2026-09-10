@@ -1,6 +1,6 @@
 {
   "name": "coordinator",
-  "version": "4.0.1",
+  "version": "4.1.0",
   "description": "A Claude Code skill: the project's front door. Scopes every ask, keeps the ledger of lanes run in other sessions, writes intent-only prompts, verifies what returns.",
   "type": "module",
   "license": "MIT",
