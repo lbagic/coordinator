@@ -931,11 +931,15 @@ export class NotifyTail {
   }
 }
 
-export function renderNotify(n, name) {
+// `lane` is the status of the lane that holds the session, when one does: the
+// line then carries what it wants, its last ask or else the end of its last
+// message, so no second command is needed to learn it.
+export function renderNotify(n, name, lane = null) {
   const who = n.session_id ? `session ${String(n.session_id).slice(0, 8)}` : 'session ?';
   const where = name || (n.cwd ? path.basename(n.cwd) : '?');
   const msg = String(n.message || '').replace(/\s+/g, ' ').trim();
-  return `${where}: notify  ${who}  ${fmtTs(n.at)}  ${msg || 'wants the user'}`;
+  const what = !lane ? '' : lane.asked && lane.ask ? `  asked: ${capTo(lane.ask.replace(/\s+/g, ' ').trim(), ASK_CHARS)}` : lane.tail ? `  said: ${tailText(lane.tail)}` : '';
+  return `${where}: notify  ${who}  ${fmtTs(n.at)}  ${msg || 'wants the user'}${what}`;
 }
 
 // ---------- store ----------
@@ -2307,6 +2311,7 @@ async function watchCommand(args) {
   const notify = new NotifyTail(args.notify ? path.resolve(lanes.cwd, args.notify) : NOTIFY_LOG);
   const seen = new Map();
   const laneOf = new Map();
+  const statusOf = new Map();
   let ghAt = 0;
   let first = true;
   for (;;) {
@@ -2316,7 +2321,10 @@ async function watchCommand(args) {
     const summary = [];
     for (const lane of files) {
       const r = lanes.status(lane, registry, trees);
-      if (r.session) laneOf.set(r.session, lane.name);
+      if (r.session) {
+        laneOf.set(r.session, lane.name);
+        statusOf.set(r.session, r);
+      }
       const key = `${r.status}:${r.session || ''}:${r.close_index ?? ''}:${r.turn_index ?? ''}`;
       if (first) {
         summary.push(`${lane.name}=${r.status}`);
@@ -2338,7 +2346,7 @@ async function watchCommand(args) {
       if (n.session_id && n.session_id === lanes.own) continue;
       const name = laneOf.get(n.session_id) || null;
       if (!name && !(n.cwd && trees.has(path.resolve(n.cwd)))) continue;
-      console.log(renderNotify(n, name));
+      console.log(renderNotify(n, name, name ? statusOf.get(n.session_id) : null));
     }
     // GitHub once a minute: the numbers the ledger names, printed only when
     // a state moves; the first pass arms the file and prints nothing new.

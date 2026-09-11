@@ -120,6 +120,13 @@ test('a notify line names its lane when one holds the session, else its director
   assert.equal(renderNotify(n, 'red-conflict-pick'), 'red-conflict-pick: notify  session abcdef01  2026-09-08 16:51:08  needs permission');
   assert.equal(renderNotify(n, null), 'nightshift: notify  session abcdef01  2026-09-08 16:51:08  needs permission');
   assert.equal(renderNotify({ cwd: '/w/nightshift' }, null), 'nightshift: notify  session ?  ?  wants the user');
+  const asked = { status: 'stopped', asked: true, ask: `Which branch should I rebase onto, ${'main '.repeat(40)}?`, tail: 'long tail' };
+  const line = renderNotify(n, 'red-conflict-pick', asked);
+  assert.ok(line.startsWith('red-conflict-pick: notify  session abcdef01  2026-09-08 16:51:08  needs permission  asked: Which branch should I rebase onto, main'), line);
+  assert.ok(line.endsWith('…') && line.length === 'red-conflict-pick: notify  session abcdef01  2026-09-08 16:51:08  needs permission  asked: '.length + 120, 'the ask is capped');
+  assert.equal(renderNotify(n, 'red-conflict-pick', { status: 'stopped', asked: false, ask: 'Suite running.', tail: 'Pushed 4 commits.\nSuite running.' }), 'red-conflict-pick: notify  session abcdef01  2026-09-08 16:51:08  needs permission  said: Pushed 4 commits. Suite running.', 'a lane that asked nothing carries its tail');
+  assert.equal(renderNotify(n, 'red-conflict-pick', { status: 'in_progress' }), 'red-conflict-pick: notify  session abcdef01  2026-09-08 16:51:08  needs permission', 'nothing to add mid-turn');
+  assert.equal(renderNotify(n, null, null), 'nightshift: notify  session abcdef01  2026-09-08 16:51:08  needs permission', 'a session holding no lane is unchanged');
 });
 
 test('the notify tail arms on its first read, then returns only what was appended', () => {
