@@ -201,7 +201,7 @@ Pointers token naming an item id are still refused.
 - `scout <effort>`: print the scout prompt for the Agent call
 - `init --hook`: print the Notification hook JSON
 - `watch [--gh-poll MS]`: as before, plus GitHub transitions
-- `retire <name> <why> [--force]`: as before, and the lane leaves its effort's `lanes:` key; refused while an open item's `after:`, `until:` or `blocks:` names the lane, since the retire's OK would satisfy it (`--force` retires and warns)
+- `retire <name> <why> [--force]`: as before, and the lane leaves its effort's `lanes:` key; refused while an open item's `after:`, `until:` or `blocks:` names the lane, since the retire's OK would satisfy it (`--force` retires and warns); after the OK it prints a `re-issue:` block from the worktree the session sat in, the same lines `resume` prints, and a git read that fails prints `(unreadable)` without failing the retire
 
 ## 5b. The hand-off
 

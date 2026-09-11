@@ -1912,19 +1912,24 @@ export function lastDatedLine(body) {
   return dated.length ? capHead(dated[dated.length - 1].trim()) : null;
 }
 
+// What a lane leaves behind, indented under its row: the uncommitted files,
+// the commits ahead of the base, the report's last section. `resume` and
+// `retire` print the same lines.
+export function laneFactLines(r, f) {
+  const listed = (xs, sep) => (xs == null ? '(unreadable)' : xs.length ? xs.join(sep) : 'none');
+  return [`  uncommitted: ${listed(f.dirty, ' ')}`, `  ahead of ${f.base || 'the base'}: ${listed(f.ahead, '; ')}`, `  report: ${lastReportSection(r.report) || 'none yet'}`];
+}
+
 // The resume view: per live lane its status, session, worktree, uncommitted
 // files, commits ahead of the base and its report's last section; per open
 // STEP or DECIDE its headline and its last dated body line. factsOf(r) is
 // worktreeFacts for the lane's session directory. Pure but for factsOf.
 export function resumeRows(live, items, factsOf) {
   const out = [];
-  const listed = (xs, sep) => (xs == null ? '(unreadable)' : xs.length ? xs.join(sep) : 'none');
   for (const r of live) {
     const f = factsOf(r);
     out.push(`LIVE    ${r.name}  ${r.status}  ${r.peer || (r.session || '?').slice(0, 8)}  ${f.worktree || '(unreadable)'}`);
-    out.push(`  uncommitted: ${listed(f.dirty, ' ')}`);
-    out.push(`  ahead of ${f.base || 'the base'}: ${listed(f.ahead, '; ')}`);
-    out.push(`  report: ${lastReportSection(r.report) || 'none yet'}`);
+    out.push(...laneFactLines(r, f));
   }
   for (const it of items) out.push(`${it.kind.padEnd(6)}  #${it.id}  ${capHead(it.head)}  last: ${lastDatedLine(it.body) || 'no dated line'}`);
   return out.length ? out : ['nothing live, no open STEP or DECIDE'];
@@ -2478,6 +2483,17 @@ function retireCommand(args) {
     console.error(`retire: no lane named ${name}`);
     return 1;
   }
+  // What the relaunch needs, read before the prompt file goes: the session's
+  // worktree and what it holds. A convenience, never a gate on retiring.
+  const lanes = new Lanes(cwd, { store: args.store });
+  const launched = lanes.promptFiles().find((l) => l.name === name);
+  const was = launched ? lanes.status(launched) : null;
+  const reissue = !was || was.status === 'not_found'
+    ? ['re-issue: no session took it']
+    : (() => {
+        const f = worktreeFacts(lanes.sessionCwd(was));
+        return [`re-issue: ${name} ${was.status}, worktree ${f.worktree || '(unreadable)'}`, ...laneFactLines(was, f)];
+      })();
   // A retire appends an OK, and an OK satisfies every edge that names the lane:
   // refuse while an open item waits on it, unless --force.
   const edges = store.items
@@ -2504,6 +2520,7 @@ function retireCommand(args) {
     fs.writeFileSync(ef, setHeaderKey(fs.readFileSync(ef, 'utf8'), 'lanes', kept.map(([k, v]) => `${k}=${v}`).join(' ')));
     out.push(`${STORE_DIR}/${it.file}: lanes: ${kept.length ? kept.map(([k, v]) => `${k}=${v}`).join(' ') : 'none'}`);
   }
+  out.push(...reissue);
   console.log(out.join('\n'));
   return 0;
 }

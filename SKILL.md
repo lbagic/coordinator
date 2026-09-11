@@ -110,7 +110,7 @@ The watch prints one line per transition; `L status <name>` repeats it.
   report is verified against what it says it left: the file, the ticket, the map.
 - `continued`: a commit after the report is not in the report; re-verify, `L ok` again.
 - `stopped` or `stalled`: tell the user which session and what it asked; a question with
-  options is a DECIDE. `exited`: `L retire <name> exited` (the effort forgets the lane), then a fresh prompt
+  options is a DECIDE. `exited`: `L retire <name> exited` (the effort forgets the lane; its `re-issue:` block names the worktree, commits, uncommitted files and report tail to carry over), then a fresh prompt
   under a new name.
 - `github: #N merged|closed`: the effort row moves; on merged, the close-out acts.
 - `notify`: a session wants the user; say which and what.

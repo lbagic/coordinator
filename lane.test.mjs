@@ -1107,7 +1107,7 @@ test('goals.md, handoff.md and board.txt live beside the items and are never ite
   assert.match(fs.readFileSync(path.join(dir, 'board.txt'), 'utf8'), /^board lane-cli-\S+ \d{4}-\d\d-\d\d \d\d:\d\d:\d\d\nRUN     prompt-cols\.txt  implement  rows show it\nMINE    #4  a note\nCTX /);
   assert.match(run('delta'), /· no change · you 1 · live 0 · mine 1$/);
   const retired = run('retire', 'cols', 'user launched it inline');
-  assert.match(retired, /^OK cols \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ retired: user launched it inline\nremoved coordinator\/prompt-cols\.txt$/);
+  assert.match(retired, /^OK cols \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ retired: user launched it inline\nremoved coordinator\/prompt-cols\.txt\nre-issue: no session took it$/);
   assert.ok(!fs.existsSync(path.join(dir, 'prompt-cols.txt')));
   assert.match(fails('prompt', 'cols', '--kind', 'implement', '--ask', 'x', '--done', 'y'), /cols already has an OK/);
   assert.match(run('delta'), /· -RUN prompt-cols\.txt implement rows show it · you 0 · live 0 · mine 1$/);
@@ -1155,6 +1155,48 @@ test('retire refuses while an open item waits on the lane through after:, until:
   assert.match(forced.stdout, /coordinator\/191-ef\.md: lanes: none/);
   assert.equal(lanesTxt().split('\n').filter(Boolean).length, 1, 'still exactly one OK line');
   fs.rmSync(cwd, { recursive: true });
+});
+
+test('retire prints the re-issue block from the worktree the session sat in: its commits, its uncommitted files, its report tail; with no git it prints (unreadable) and still retires', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-reissue-home-'));
+  const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lane-reissue-')));
+  const wt = `${repo}-wt`;
+  const git = (...a) => execFileSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  git('init', '-q', '-b', 'main');
+  fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n');
+  git('add', 'a.txt');
+  git('commit', '-q', '-m', 'base');
+  git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+  git('worktree', 'add', '-q', '--detach', wt);
+  fs.writeFileSync(path.join(wt, 'b.txt'), 'b\n');
+  execFileSync('git', ['-C', wt, '-c', 'user.name=t', '-c', 'user.email=t@t', 'add', 'b.txt']);
+  execFileSync('git', ['-C', wt, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'half the lane']);
+  fs.writeFileSync(path.join(wt, 'wip.ts'), 'x\n');
+  const setup = () => {
+    fs.mkdirSync(path.join(repo, 'coordinator', 'closed'), { recursive: true });
+    fs.writeFileSync(path.join(repo, 'coordinator', 'prompt-grid.txt'), 'TASK grid\nbuild the grid\n');
+    const dir = path.join(home, '.claude', 'projects', repo.replace(/[^A-Za-z0-9]/g, '-'));
+    fs.mkdirSync(dir, { recursive: true });
+    const stamp = new Date().toISOString();
+    fs.writeFileSync(path.join(dir, 'sess-grid.jsonl'), [
+      { type: 'user', sessionId: 'sess-grid', timestamp: stamp, cwd: wt, origin: { kind: 'human' }, message: { content: 'TASK grid\nbuild the grid\n' } },
+      { type: 'assistant', sessionId: 'sess-grid', timestamp: stamp, cwd: wt, message: { content: [{ type: 'text', text: 'working' }], stop_reason: 'tool_use' } },
+    ].map((r) => JSON.stringify(r)).join('\n') + '\n');
+  };
+  const retire = (env) => spawnSync(process.execPath, [path.join(HERE, 'lane.mjs'), 'retire', 'grid', 'session gone', '--cwd', repo], { encoding: 'utf8', env: { ...process.env, HOME: home, CLAUDE_CODE_SESSION_ID: '', ...env } });
+  setup();
+  const withGit = retire({});
+  assert.equal(withGit.status, 0, withGit.stderr);
+  const sha = execFileSync('git', ['-C', wt, 'rev-parse', '--short', 'HEAD'], { encoding: 'utf8' }).trim();
+  assert.match(withGit.stdout, new RegExp(`\\nre-issue: grid in_progress, worktree ${fs.realpathSync(wt)}\\n  uncommitted: wip\\.ts\\n  ahead of origin/main: ${sha} half the lane\\n  report: none yet\\n$`), withGit.stdout);
+  fs.rmSync(path.join(repo, 'coordinator', 'lanes.txt'));
+  setup();
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-nogit-'));
+  const noGit = retire({ PATH: bin });
+  assert.equal(noGit.status, 0, noGit.stderr);
+  assert.match(noGit.stdout, /\nre-issue: grid in_progress, worktree \S+\n  uncommitted: \(unreadable\)\n  ahead of the base: \(unreadable\)\n/, noGit.stdout);
+  assert.match(fs.readFileSync(path.join(repo, 'coordinator', 'lanes.txt'), 'utf8'), /^OK grid \S+ retired: session gone\n$/);
+  for (const d of [home, repo, wt, bin]) fs.rmSync(d, { recursive: true, force: true });
 });
 
 test('snooze: a date after today hides the row and CTX counts it; today or yesterday shows it again; delta reports the vanish and the return; snooze Nd sets the date and logs the why; a bad date is a fault', () => {
@@ -1288,7 +1330,7 @@ test('the effort flow on the CLI: new EFFORT, scout, set size and path, prompt -
   assert.match(fails('new', 'NOTE', 'n', '--size', 'X'), /size: 'X' is not S, M or L/);
   assert.deepEqual(readStore(cwd).items.map((i) => i.file), ['1-legend.md'], 'a faulty item is refused, not written');
   assert.match(fails('did', 'ghost', 'x'), /no open EFFORT named ghost/);
-  assert.match(run('retire', 'leg-research', 'exited'), /removed coordinator\/prompt-leg-research\.txt\ncoordinator\/1-legend\.md: lanes: none$/);
+  assert.match(run('retire', 'leg-research', 'exited'), /removed coordinator\/prompt-leg-research\.txt\ncoordinator\/1-legend\.md: lanes: none\nre-issue: no session took it$/);
   assert.match(run('board'), /EFFORT  legend M  write prompt research  #1/, 'a retired lane leaves the effort where it was');
   assert.match(run('prompt', 'leg-research-2', '--kind', 'research', '--effort', 'legend', '--ask', 'a', '--done', 'd', '--fences', 'read-only'), /lanes: research=leg-research-2$/);
   fs.rmSync(cwd, { recursive: true });
