@@ -10,7 +10,8 @@
 //                                                 write prompt-<name>.txt: five fields, the kind's protocol, the REPORT block
 //   lane.mjs sync [--all] [--cwd DIR]             ask GitHub about every number the ledger names, rewrite coordinator/github.txt
 //   lane.mjs who [<lane>] [--all] [--cwd DIR]     every lane that holds something with its session name, tty, status, idle time, cwd; --all: every launched lane
-//   lane.mjs relay <lane> <text…> [--cwd DIR]     append SENT <lane> <time> <text>, print the TO-headed message and its session
+//   lane.mjs relay <lane> <text…> [--cwd DIR]     print the TO-headed message and its session, and hold it as pending; no ledger line
+//   lane.mjs sent <lane> [--cwd DIR]              after the send happened: append SENT <lane> <time> <text> from the pending message
 //   lane.mjs did <effort> <what…> [--cwd DIR]     append DID <effort> <time> <what>: a GitHub act the coordinator did itself
 //   lane.mjs set <id|name> <key> <value…>         rewrite one header key of an open item
 //   lane.mjs snooze <id|name> <N>d [why…]         set snooze: to today+N (0d wakes it) and log the why as a body line
@@ -2053,9 +2054,38 @@ function relayCommand(args) {
     console.error(`relay: ${name} is ${r.status}; no session to send to`);
     return 1;
   }
+  // The ledger records only what reached a session: relay writes the message
+  // as pending, and `sent` turns it into the SENT line once it has gone.
+  const dir = storeDir(lanes.cwd, args.store);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, relayFile(name)), `${text.trim()}\n`);
+  console.log(`to: ${r.peer || r.session}\n${relayText(name, text)}\nafter the send: lane.mjs sent ${name}`);
+  return 0;
+}
+
+function relayFile(name) {
+  return `relay-${name}.txt`;
+}
+
+function sentCommand(args) {
+  const name = args._[1];
+  if (!name || !NAME_RE.test(name)) {
+    console.error('usage: lane.mjs sent <lane> [--cwd DIR]');
+    return 1;
+  }
+  const dir = storeDir(path.resolve(args.cwd || process.cwd()), args.store);
+  const pending = path.join(dir, relayFile(name));
+  let text;
+  try {
+    text = fs.readFileSync(pending, 'utf8');
+  } catch {
+    console.error(`sent: nothing relayed to ${name}; lane.mjs relay ${name} <text…> first`);
+    return 1;
+  }
   const line = `SENT ${name} ${nowIso()} ${text.replace(/\s+/g, ' ').trim()}`;
-  appendLane(storeDir(lanes.cwd, args.store), line);
-  console.log(`to: ${r.peer || r.session}\n${relayText(name, text)}\n${line}`);
+  appendLane(dir, line);
+  fs.unlinkSync(pending);
+  console.log(line);
   return 0;
 }
 
@@ -2801,6 +2831,7 @@ const USAGE = [
   '       lane.mjs sync [--all] [--cwd DIR]',
   '       lane.mjs who [<lane>] [--all] [--cwd DIR]',
   '       lane.mjs relay <lane> <text…> [--cwd DIR]',
+  '       lane.mjs sent <lane> [--cwd DIR]                  after the send: the SENT line for what relay printed',
   '       lane.mjs did <effort> <what…> [--cwd DIR]',
   '       lane.mjs set <id|name> <key> <value…> [--cwd DIR]',
   '       lane.mjs snooze <id|name> <N>d [why…] [--cwd DIR]',
@@ -2882,6 +2913,8 @@ async function main() {
       return showCommand(args);
     case 'new':
       return newCommand(args);
+    case 'sent':
+      return sentCommand(args);
     case 'done':
       return bodyLineCommand(args, 'done');
     case 'note':

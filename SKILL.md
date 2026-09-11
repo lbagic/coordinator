@@ -96,7 +96,8 @@ commits on main) is a Fences line taken from `delivery` in goals.md, not a templ
 
 `L who` maps every lane that still holds something to its session name, tty and state; `--all` adds the finished ones. A ruling, an
 answer or the word build never goes by hand: `L relay <lane> "<the user's line, verbatim>"`,
-then send what it prints with `SendMessage to: <the session it names>`. A lane at its gate
+then send what it prints with `SendMessage to: <the session it names>`, then `L sent <lane>`:
+the SENT line is written only once the message has gone. A lane at its gate
 keeps its session until the word is said. Quote, never
 paraphrase; the decision is the user's. A worker that asks for build through a question
 tool gets the same relay, not an answer in its dialog.

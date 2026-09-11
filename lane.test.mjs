@@ -1296,6 +1296,34 @@ test('done closes a STEP with a dated evidence line and files it; note appends a
   fs.rmSync(cwd, { recursive: true });
 });
 
+test('relay prints the addressed message and appends nothing; sent appends exactly one SENT line once the message has gone, and the board reads its build word', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-relay-home-'));
+  const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lane-relay-')));
+  const dir = path.join(repo, 'coordinator');
+  fs.mkdirSync(path.join(dir, 'closed'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'prompt-cell.txt'), 'TASK cell\nbuild the cell\n');
+  const tdir = path.join(home, '.claude', 'projects', repo.replace(/[^A-Za-z0-9]/g, '-'));
+  fs.mkdirSync(tdir, { recursive: true });
+  const stamp = new Date().toISOString();
+  fs.writeFileSync(path.join(tdir, 'sess-cell.jsonl'), `${JSON.stringify({ type: 'user', sessionId: 'sess-cell', timestamp: stamp, cwd: repo, origin: { kind: 'human' }, message: { content: 'TASK cell\nbuild the cell\n' } })}\n`);
+  const cli = (...a) => spawnSync(process.execPath, [path.join(HERE, 'lane.mjs'), ...a, '--cwd', repo], { encoding: 'utf8', env: { ...process.env, HOME: home, CLAUDE_CODE_SESSION_ID: '' } });
+  const lanesTxt = () => (fs.existsSync(path.join(dir, 'lanes.txt')) ? fs.readFileSync(path.join(dir, 'lanes.txt'), 'utf8') : '');
+  assert.match(cli('sent', 'cell').stderr, /sent: nothing relayed to cell/);
+  const relayed = cli('relay', 'cell', 'Ruling on amendment 1: (a). build');
+  assert.equal(relayed.status, 0, relayed.stderr);
+  assert.equal(relayed.stdout, 'to: sess-cell\nTO cell\nRuling on amendment 1: (a). build\nafter the send: lane.mjs sent cell\n');
+  assert.equal(lanesTxt(), '', 'relay writes no ledger line');
+  const sent = cli('sent', 'cell');
+  assert.equal(sent.status, 0, sent.stderr);
+  assert.match(sent.stdout, /^SENT cell \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ Ruling on amendment 1: \(a\)\. build\n$/);
+  assert.equal(lanesTxt(), sent.stdout, 'exactly one SENT line');
+  assert.equal(cli('sent', 'cell').status, 1, 'a second sent has nothing pending');
+  assert.deepEqual(readStore(repo).lanes.map((l) => [l.tag, l.name]), [['SENT', 'cell']], 'the board reads the line sent wrote');
+  assert.ok(!readStore(repo).items.length, 'the pending file is never an item');
+  fs.rmSync(home, { recursive: true, force: true });
+  fs.rmSync(repo, { recursive: true, force: true });
+});
+
 test('snooze: a date after today hides the row and CTX counts it; today or yesterday shows it again; delta reports the vanish and the return; snooze Nd sets the date and logs the why; a bad date is a fault', () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-snooze-'));
   const dir = path.join(cwd, 'coordinator');

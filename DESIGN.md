@@ -198,7 +198,8 @@ Pointers token naming an item id are still refused.
 - `sync`: refresh `github.txt` from GitHub and print what changed
 - `who [<lane>] [--all]`: session name, tty, status, idle, cwd per lane that holds something
 - `resume`: per live lane its worktree (the session's cwd), uncommitted files, commits ahead of the base and report tail; per open STEP and DECIDE its last dated line; a git read that fails prints `(unreadable)`
-- `relay <lane> <text…>`: append `SENT`, print the addressed message and the session to send it to
+- `relay <lane> <text…>`: print the addressed message and the session to send it to, and hold the message as pending in `coordinator/relay-<lane>.txt`; no ledger line
+- `sent <lane>`: after the send happened, append `SENT` with the pending message and clear it, so the ledger records only what reached a session
 - `did <effort> <what…>`: append `DID`
 - `scout <effort>`: print the scout prompt for the Agent call
 - `init --hook`: print the Notification hook JSON
@@ -217,6 +218,6 @@ unverified work that holds the moment back.
 
 No migration tool: every change is additive and an older ledger parses unchanged. A LANE
 item holding a scope card is re-filed as an EFFORT by hand. No `L send`: the
-tool cannot message a session; the coordinator sends what `relay` prints. No headline
+tool cannot message a session; the coordinator sends what `relay` prints and then records it with `sent`. No headline
 scraping for numbers: an item is checked against GitHub only through `on:` and `until:`.
 No effort node in the page graph: an effort is a row and an item with its own filter toggle; the graph draws only what waits on what.
