@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync, spawn } from 'node:child_process';
-import { exited, launchBlock, EXIT_GRACE_MS, promptField, promptFaults, buildPrompt, deltaLine, latestTime, GOALS_TEMPLATE, analyze, findPrompt, nameOf, ctxTokens, windowFromModel, modelFromArgv, argsRe, render, newer, parseBoardLines, parseItem, foldStore, readStore, boardRows, nextId, mintItem, slugOf, isCoordinatorSession, question, askLine, boardData, labelFaults, parseNotify, NotifyTail, renderNotify, parseGithub, githubLine, reportPr, effortFaults, parseFields, protocolOf, setHeaderKey, scoutPrompt, HOOK_JSON, githubRefs, syncGithub, whoRows, relayText, FIELD_MAX, LANE_KINDS, fenceTokens, fenceOverlap, launchLane, peerText, gateStop, handoffDue, HANDOFF_AT, isLive, okNames, liveRow, shorthandLine, worktreeFacts, resumeRows, lastReportSection, lastDatedLine, foldMine, MINE_KEEP, settle, activeAt, fenceClaims, outstandingBackground } from './lane.mjs';
+import { exited, launchBlock, EXIT_GRACE_MS, promptField, promptFaults, buildPrompt, deltaLine, latestTime, GOALS_TEMPLATE, analyze, findPrompt, nameOf, ctxTokens, windowFromModel, modelFromArgv, argsRe, render, newer, parseBoardLines, parseItem, foldStore, readStore, boardRows, nextId, mintItem, slugOf, isCoordinatorSession, question, askLine, boardData, labelFaults, parseNotify, NotifyTail, renderNotify, parseGithub, githubLine, reportPr, effortFaults, parseFields, protocolOf, setHeaderKey, scoutPrompt, HOOK_JSON, githubRefs, syncGithub, whoRows, relayText, FIELD_MAX, LANE_KINDS, fenceTokens, fenceOverlap, launchLane, peerText, gateStop, handoffDue, HANDOFF_AT, isLive, okNames, liveRow, shorthandLine, worktreeFacts, resumeRows, lastReportSection, lastDatedLine, commandPaths, worktreeFromCommands, foldMine, MINE_KEEP, settle, activeAt, fenceClaims, outstandingBackground } from './lane.mjs';
 
 process.env.TZ = 'UTC';
 
@@ -879,18 +879,18 @@ test('resume: per live lane its status, worktree, uncommitted files, commits ahe
   const live = [lane('grid', 'in_progress', { peer: 'repo-9f', cwd: repo, report: 'REPORT grid\nwhat: built\nopen: the flaky pool test\n  under load' })];
   const st = store([item('198-deploy.md', 'STEP deploy first\n\nwhy: the tip is ahead\nUPDATE 2026-09-11 09:05 deploy before the restart\nnot dated\n'), item('2-n.md', 'NOTE not shown\n')]);
   const steps = st.items.filter((i) => i.kind === 'STEP');
-  const out = resumeRows(live, steps, (r) => worktreeFacts(r.cwd));
+  const out = resumeRows(live, steps, (r) => ({ ...worktreeFacts(r.cwd), from: 'session cwd' }));
   assert.deepEqual(out, [
-    `LIVE    grid  in_progress  repo-9f  ${fs.realpathSync(repo)}`,
+    `LIVE    grid  in_progress  repo-9f  ${fs.realpathSync(repo)} (session cwd)`,
     '  uncommitted: wip.ts',
     `  ahead of origin/main: ${git('rev-parse', '--short', 'HEAD').trim()} the lane commit`,
     '  report: open: the flaky pool test under load',
     'STEP    #198  deploy first  last: UPDATE 2026-09-11 09:05 deploy before the restart',
   ]);
-  const broken = resumeRows(live, steps, (r) => worktreeFacts(r.cwd, () => {
+  const broken = resumeRows(live, steps, (r) => ({ ...worktreeFacts(r.cwd, () => {
     throw new Error('git: not found');
-  }));
-  assert.deepEqual(broken.slice(0, 3), [`LIVE    grid  in_progress  repo-9f  ${repo}`, '  uncommitted: (unreadable)', '  ahead of the base: (unreadable)'], 'a failing git degrades to a row');
+  }), from: 'session cwd' }));
+  assert.deepEqual(broken.slice(0, 3), [`LIVE    grid  in_progress  repo-9f  ${repo} (session cwd)`, '  uncommitted: (unreadable)', '  ahead of the base: (unreadable)'], 'a failing git degrades to a row');
   assert.deepEqual(resumeRows([], [], () => ({})), ['nothing live, no open STEP or DECIDE']);
   assert.equal(lastReportSection('REPORT x\nwhat: y\n'), 'what: y');
   assert.equal(lastDatedLine('no dates here'), null);
@@ -901,6 +901,53 @@ test('resume: per live lane its status, worktree, uncommitted files, commits ahe
   assert.deepEqual([cli.status, cli.stdout.trim()], [0, 'STEP    #198  deploy first  last: UPDATE 2026-09-11 09:05 deploy before the restart']);
   fs.rmSync(repo, { recursive: true });
   fs.rmSync(cwd, { recursive: true });
+});
+
+test('resume reads a lane\'s worktree from its own Bash commands, not its session cwd: a same-command assignment is expanded and the last linked worktree named wins; a span that names none falls back to the session cwd, and the row says which', () => {
+  assert.deepEqual(commandPaths('SP=/a/b && cd $SP/wt && git -C "${SP}/wt2" log origin/main'), ['/a/b', '/a/b/wt', '/a/b/wt2']);
+  assert.deepEqual(commandPaths('cd $SP/wt; SP=/a'), ['/a'], 'a reference before its assignment names nothing');
+  const bash = (command) => ({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 't', name: 'Bash', input: { command } }], stop_reason: 'tool_use' } });
+  const recs = [human('TASK x'), bash('ls /r-pred/src'), bash('SP=/r && git -C $SP-wt commit -qm x'), bash('cat /r-pred/NOTES')];
+  assert.equal(worktreeFromCommands(recs, [0, 3], ['/r-wt', '/r-pred']), '/r-wt');
+  assert.equal(worktreeFromCommands(recs, [0, 4], ['/r-wt', '/r-pred']), '/r-pred', 'the last one named wins');
+  assert.equal(worktreeFromCommands([bash('git -C /r status; ls /r-wtx')], [0, 1], ['/r-wt']), null, 'the main checkout and a sibling prefix name no linked worktree');
+
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-where-home-'));
+  const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lane-where-')));
+  const [wt, pred] = [`${repo}-wt`, `${repo}-pred`];
+  const git = (dir, ...a) => execFileSync('git', ['-C', dir, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  git(repo, 'init', '-q', '-b', 'main');
+  fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n');
+  git(repo, 'add', 'a.txt');
+  git(repo, 'commit', '-q', '-m', 'base');
+  git(repo, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
+  git(repo, 'worktree', 'add', '-q', '--detach', wt);
+  git(repo, 'worktree', 'add', '-q', '--detach', pred);
+  fs.writeFileSync(path.join(wt, 'b.txt'), 'b\n');
+  git(wt, 'add', 'b.txt');
+  git(wt, 'commit', '-q', '-m', 'half the lane');
+  fs.writeFileSync(path.join(wt, 'wip.ts'), 'x\n');
+  fs.mkdirSync(path.join(repo, 'coordinator'));
+  const dir = path.join(home, '.claude', 'projects', repo.replace(/[^A-Za-z0-9]/g, '-'));
+  fs.mkdirSync(dir, { recursive: true });
+  const stamp = new Date().toISOString();
+  const transcript = (name, commands) => {
+    fs.writeFileSync(path.join(repo, 'coordinator', `prompt-${name}.txt`), `TASK ${name}\nbuild ${name}\n`);
+    const records = [{ type: 'user', origin: { kind: 'human' }, message: { content: `TASK ${name}\nbuild ${name}\n` } }, ...commands.map(bash)];
+    fs.writeFileSync(path.join(dir, `sess-${name}.jsonl`), records.map((r) => JSON.stringify({ ...r, sessionId: `sess-${name}`, timestamp: stamp, cwd: repo })).join('\n') + '\n');
+  };
+  // Every record's cwd is the main checkout; the commands reach the lane's own
+  // worktree through a variable, after naming a predecessor's by its path.
+  transcript('grid', [`ls ${pred}`, `SP=${path.dirname(wt)} && git -C $SP/${path.basename(wt)} commit -qm "half the lane"`]);
+  transcript('plain', ['git status']);
+  const out = spawnSync(process.execPath, [path.join(HERE, 'lane.mjs'), 'resume', '--cwd', repo], { encoding: 'utf8', env: { ...process.env, HOME: home, CLAUDE_CODE_SESSION_ID: '' } });
+  assert.equal(out.status, 0, out.stderr);
+  const sha = git(wt, 'rev-parse', '--short', 'HEAD').trim();
+  const lines = out.stdout.trim().split('\n');
+  const block = (name) => lines.slice(lines.findIndex((l) => l.startsWith(`LIVE    ${name} `)), lines.findIndex((l) => l.startsWith(`LIVE    ${name} `)) + 3);
+  assert.deepEqual(block('grid'), [`LIVE    grid  in_progress  sess-gri  ${wt} (from its commands)`, '  uncommitted: wip.ts', `  ahead of origin/main: ${sha} half the lane`], out.stdout);
+  assert.deepEqual(block('plain'), [`LIVE    plain  in_progress  sess-pla  ${repo} (session cwd)`, '  uncommitted: coordinator/', '  ahead of origin/main: none'], out.stdout);
+  for (const d of [home, repo, wt, pred]) fs.rmSync(d, { recursive: true, force: true });
 });
 
 test('new mints max+1 across open and closed, refuses an existing filename, and steps past a twin id', () => {
@@ -1242,7 +1289,7 @@ test('retire refuses while an open item waits on the lane through after:, until:
   fs.rmSync(cwd, { recursive: true });
 });
 
-test('retire prints the re-issue block from the worktree the session sat in: its commits, its uncommitted files, its report tail; with no git it prints (unreadable) and still retires', () => {
+test('retire prints the re-issue block from the worktree the lane\'s commands name: its commits, its uncommitted files, its report tail; with no git it falls back to the session cwd, prints (unreadable) and still retires', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-reissue-home-'));
   const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'lane-reissue-')));
   const wt = `${repo}-wt`;
@@ -1264,8 +1311,8 @@ test('retire prints the re-issue block from the worktree the session sat in: its
     fs.mkdirSync(dir, { recursive: true });
     const stamp = new Date().toISOString();
     fs.writeFileSync(path.join(dir, 'sess-grid.jsonl'), [
-      { type: 'user', sessionId: 'sess-grid', timestamp: stamp, cwd: wt, origin: { kind: 'human' }, message: { content: 'TASK grid\nbuild the grid\n' } },
-      { type: 'assistant', sessionId: 'sess-grid', timestamp: stamp, cwd: wt, message: { content: [{ type: 'text', text: 'working' }], stop_reason: 'tool_use' } },
+      { type: 'user', sessionId: 'sess-grid', timestamp: stamp, cwd: repo, origin: { kind: 'human' }, message: { content: 'TASK grid\nbuild the grid\n' } },
+      { type: 'assistant', sessionId: 'sess-grid', timestamp: stamp, cwd: repo, message: { content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: `git -C ${wt} commit -qm "half the lane"` } }], stop_reason: 'tool_use' } },
     ].map((r) => JSON.stringify(r)).join('\n') + '\n');
   };
   const retire = (env) => spawnSync(process.execPath, [path.join(HERE, 'lane.mjs'), 'retire', 'grid', 'session gone', '--cwd', repo], { encoding: 'utf8', env: { ...process.env, HOME: home, CLAUDE_CODE_SESSION_ID: '', ...env } });
@@ -1273,13 +1320,13 @@ test('retire prints the re-issue block from the worktree the session sat in: its
   const withGit = retire({});
   assert.equal(withGit.status, 0, withGit.stderr);
   const sha = execFileSync('git', ['-C', wt, 'rev-parse', '--short', 'HEAD'], { encoding: 'utf8' }).trim();
-  assert.match(withGit.stdout, new RegExp(`\\nre-issue: grid in_progress, worktree ${fs.realpathSync(wt)}\\n  uncommitted: wip\\.ts\\n  ahead of origin/main: ${sha} half the lane\\n  report: none yet\\n$`), withGit.stdout);
+  assert.match(withGit.stdout, new RegExp(`\\nre-issue: grid in_progress, worktree ${fs.realpathSync(wt)} \\(from its commands\\)\\n  uncommitted: wip\\.ts\\n  ahead of origin/main: ${sha} half the lane\\n  report: none yet\\n$`), withGit.stdout);
   fs.rmSync(path.join(repo, 'coordinator', 'lanes.txt'));
   setup();
   const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-nogit-'));
   const noGit = retire({ PATH: bin });
   assert.equal(noGit.status, 0, noGit.stderr);
-  assert.match(noGit.stdout, /\nre-issue: grid in_progress, worktree \S+\n  uncommitted: \(unreadable\)\n  ahead of the base: \(unreadable\)\n/, noGit.stdout);
+  assert.match(noGit.stdout, new RegExp(`\\nre-issue: grid in_progress, worktree ${repo} \\(session cwd\\)\\n  uncommitted: \\(unreadable\\)\\n  ahead of the base: \\(unreadable\\)\\n`), noGit.stdout);
   assert.match(fs.readFileSync(path.join(repo, 'coordinator', 'lanes.txt'), 'utf8'), /^OK grid \S+ retired: session gone\n$/);
   for (const d of [home, repo, wt, bin]) fs.rmSync(d, { recursive: true, force: true });
 });

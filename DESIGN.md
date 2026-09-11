@@ -198,14 +198,14 @@ Pointers token naming an item id are still refused.
 - `note <id> <text…>`: append `UPDATE <date> <hh:mm> <text>` to the body; the item stays open
 - `sync`: refresh `github.txt` from GitHub and print what changed
 - `who [<lane>] [--all]`: session name, tty, status, idle, cwd per lane that holds something
-- `resume`: per live lane its worktree (the session's cwd), uncommitted files, commits ahead of the base and report tail; per open STEP and DECIDE its last dated line; a git read that fails prints `(unreadable)`
+- `resume`: per live lane its worktree (the last linked worktree of the repository its own Bash commands name, a `NAME=value` set earlier in the same command expanded; the session's cwd when they name none; the row says `(from its commands)` or `(session cwd)`), uncommitted files, commits ahead of the base and report tail; per open STEP and DECIDE its last dated line; a git read that fails prints `(unreadable)`
 - `relay <lane> <text…>`: print the addressed message and the session to send it to, and hold the message as pending in `coordinator/relay-<lane>.txt`; no ledger line
 - `sent <lane>`: after the send happened, append `SENT` with the pending message and clear it, so the ledger records only what reached a session
 - `did <effort> <what…>`: append `DID`
 - `scout <effort>`: print the scout prompt for the Agent call
 - `init --hook`: print the Notification hook JSON
 - `watch [--gh-poll MS]`: as before, plus GitHub transitions
-- `retire <name> <why> [--force]`: as before, and the lane leaves its effort's `lanes:` key; refused while an open item's `after:`, `until:` or `blocks:` names the lane, since the retire's OK would satisfy it (`--force` retires and warns); after the OK it prints a `re-issue:` block from the worktree the session sat in, the same lines `resume` prints, and a git read that fails prints `(unreadable)` without failing the retire
+- `retire <name> <why> [--force]`: as before, and the lane leaves its effort's `lanes:` key; refused while an open item's `after:`, `until:` or `blocks:` names the lane, since the retire's OK would satisfy it (`--force` retires and warns); after the OK it prints a `re-issue:` block from the lane's worktree, read as `resume` reads it and printed in the same lines, and a git read that fails prints `(unreadable)` without failing the retire
 
 ## 5b. The hand-off
 

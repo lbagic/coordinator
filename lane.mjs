@@ -436,7 +436,6 @@ export function analyze(records, name) {
   const i = findPrompt(records, name);
   if (i < 0) return null;
   const report = reportRe(name);
-  const base = { session: records[i].sessionId || null, prompt_at: records[i].timestamp || null };
   let close = null;
   let endTurn = null;
   let lastActive = i;
@@ -464,6 +463,8 @@ export function analyze(records, name) {
     if (report.test(t)) close = { index: j, text: t, at: records[j].timestamp || null };
     if (records[j].message && records[j].message.stop_reason === 'end_turn') endTurn = { index: j, text: t, at: records[j].timestamp || null };
   }
+  // span: the lane's records, from the adopting one to the next lane's.
+  const base = { session: records[i].sessionId || null, prompt_at: records[i].timestamp || null, span: [i, end] };
   let last = null;
   for (let j = end - 1; j >= 0 && !last; j--) last = records[j].timestamp || null;
   if (close) {
@@ -635,15 +636,51 @@ function ownSessionId() {
   return null;
 }
 
-function worktrees(cwd) {
-  const set = new Set([path.resolve(cwd)]);
+// `git worktree list` of the repository at cwd, the main checkout first; empty
+// outside a repository or without git.
+function worktreeList(cwd) {
   try {
     const out = execFileSync('git', ['-C', cwd, 'worktree', 'list', '--porcelain'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-    for (const line of out.split('\n')) if (line.startsWith('worktree ')) set.add(path.resolve(line.slice(9).trim()));
+    return out.split('\n').filter((line) => line.startsWith('worktree ')).map((line) => path.resolve(line.slice(9).trim()));
   } catch {
-    // not a git repo
+    return [];
   }
-  return set;
+}
+
+function worktrees(cwd) {
+  return new Set([path.resolve(cwd), ...worktreeList(cwd)]);
+}
+
+// The absolute paths a shell command names, after expanding each `NAME=value`
+// assignment into the `$NAME` and `${NAME}` that follow it. Only the same
+// command's assignments count: every Bash call is a fresh shell.
+export function commandPaths(command) {
+  const vars = new Map();
+  const sub = (s) => s.replace(/\$\{([A-Za-z_]\w*)\}|\$([A-Za-z_]\w*)/g, (m, braced, bare) => vars.get(braced || bare) ?? m);
+  const expanded = String(command || '').replace(/(?<=^|[\s;&|(])([A-Za-z_]\w*)=("[^"]*"|'[^']*'|[^\s;&|)]*)|\$\{([A-Za-z_]\w*)\}|\$([A-Za-z_]\w*)/g, (m, name, value, braced, bare) => {
+    if (!name) return vars.get(braced || bare) ?? m;
+    const v = value.startsWith("'") ? value.slice(1, -1) : sub(value.replace(/^"([\s\S]*)"$/, '$1'));
+    vars.set(name, v);
+    return `${name}=${v}`;
+  });
+  return [...expanded.matchAll(/(?:^|[\s'"=(:])(\/[^\s'"`;|&()<>]*)/g)].map((m) => m[1].replace(/(.)\/+$/, '$1'));
+}
+
+// The worktree a lane works in, read from its own Bash commands: the last path
+// in records[from, to) that lies inside one of `linked` (the repository's
+// worktrees without its main checkout). Null when the span names none.
+export function worktreeFromCommands(records, [from, to], linked) {
+  const roots = [...linked].sort((a, b) => b.length - a.length);
+  let found = null;
+  for (let j = Math.max(0, from); j < Math.min(to, records.length); j++) {
+    const r = records[j];
+    const blocks = r.type === 'assistant' && r.message && Array.isArray(r.message.content) ? r.message.content : [];
+    for (const b of blocks) {
+      if (b.type !== 'tool_use' || b.name !== 'Bash' || !b.input) continue;
+      for (const p of commandPaths(b.input.command)) found = roots.find((root) => p === root || p.startsWith(`${root}/`)) || found;
+    }
+  }
+  return found;
 }
 
 // Running `lane.mjs watch` processes on this machine, any repo. More than one
@@ -836,6 +873,16 @@ export class Lanes {
     const t = r.file ? this.transcripts.read(r.file) : null;
     for (let j = t ? t.records.length - 1 : -1; j >= 0; j--) if (t.records[j].cwd) return t.records[j].cwd;
     return null;
+  }
+
+  // What a lane left where it works, for `resume` and `retire` alike. A lane
+  // that builds through `git -C` never moves its session's cwd, so the worktree
+  // is the last linked one its own Bash commands name, and the session's cwd
+  // only when they name none; `from` says which.
+  laneFacts(r, registry = readRegistry(), linked = worktreeList(this.cwd).slice(1)) {
+    const t = r.file && r.span ? this.transcripts.read(r.file) : null;
+    const named = t ? worktreeFromCommands(t.records, r.span, linked) : null;
+    return { ...worktreeFacts(named || this.sessionCwd(r, registry)), from: named ? 'from its commands' : 'session cwd' };
   }
 
   coordinatorTranscript() {
@@ -1978,12 +2025,12 @@ export function laneFactLines(r, f) {
 // The resume view: per live lane its status, session, worktree, uncommitted
 // files, commits ahead of the base and its report's last section; per open
 // STEP or DECIDE its headline and its last dated body line. factsOf(r) is
-// worktreeFacts for the lane's session directory. Pure but for factsOf.
+// Lanes.laneFacts. Pure but for factsOf.
 export function resumeRows(live, items, factsOf) {
   const out = [];
   for (const r of live) {
     const f = factsOf(r);
-    out.push(`LIVE    ${r.name}  ${r.status}  ${r.peer || (r.session || '?').slice(0, 8)}  ${f.worktree || '(unreadable)'}`);
+    out.push(`LIVE    ${r.name}  ${r.status}  ${r.peer || (r.session || '?').slice(0, 8)}  ${f.worktree || '(unreadable)'} (${f.from})`);
     out.push(...laneFactLines(r, f));
   }
   for (const it of items) out.push(`${it.kind.padEnd(6)}  #${it.id}  ${capHead(it.head)}  last: ${lastDatedLine(it.body) || 'no dated line'}`);
@@ -1993,10 +2040,11 @@ export function resumeRows(live, items, factsOf) {
 function resumeCommand(args) {
   const { rows, results, store, lanes, registry } = boardData(args);
   const ok = okNames(store);
-  const live = results.filter((r) => isLive(r, ok)).map((r) => ({ ...r, cwd: lanes.sessionCwd(r, registry) }));
+  const live = results.filter((r) => isLive(r, ok));
   const onBoard = new Set(rows.map((r) => /^(?:STEP|DECIDE)\s+#(\d+)/.exec(r)).filter(Boolean).map((m) => Number(m[1])));
   const items = store.items.filter((i) => (i.kind === 'STEP' || i.kind === 'DECIDE') && onBoard.has(i.id));
-  console.log(resumeRows(live, items, (r) => worktreeFacts(r.cwd)).join('\n'));
+  const linked = worktreeList(lanes.cwd).slice(1);
+  console.log(resumeRows(live, items, (r) => lanes.laneFacts(r, registry, linked)).join('\n'));
   return 0;
 }
 
@@ -2615,7 +2663,7 @@ function retireCommand(args) {
     console.error(`retire: no lane named ${name}`);
     return 1;
   }
-  // What the relaunch needs, read before the prompt file goes: the session's
+  // What the relaunch needs, read before the prompt file goes: the lane's
   // worktree and what it holds. A convenience, never a gate on retiring.
   const lanes = new Lanes(cwd, { store: args.store });
   const launched = lanes.promptFiles().find((l) => l.name === name);
@@ -2623,8 +2671,8 @@ function retireCommand(args) {
   const reissue = !was || was.status === 'not_found'
     ? ['re-issue: no session took it']
     : (() => {
-        const f = worktreeFacts(lanes.sessionCwd(was));
-        return [`re-issue: ${name} ${was.status}, worktree ${f.worktree || '(unreadable)'}`, ...laneFactLines(was, f)];
+        const f = lanes.laneFacts(was);
+        return [`re-issue: ${name} ${was.status}, worktree ${f.worktree || '(unreadable)'} (${f.from})`, ...laneFactLines(was, f)];
       })();
   // A retire appends an OK, and an OK satisfies every edge that names the lane:
   // refuse while an open item waits on it, unless --force.
