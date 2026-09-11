@@ -2626,7 +2626,7 @@ function liveCommand(args) {
 
 // Fence tokens every prompt carries that hold nothing: the base ref, the
 // worktree and review roots, the rules, the ledger.
-const FENCE_NOISE = new Set(['origin/main', 'main', '.claude/worktrees', '.claude/worktrees/', '.claude/reviews', '.claude/reviews/', '.claude/rules/', 'coordinator/', 'CLAUDE.md', 'goals.md']);
+const FENCE_NOISE = new Set(['origin/main', 'main', '.claude/worktrees', '.claude/worktrees/', '.claude/reviews', '.claude/reviews/', '.claude/rules/', 'coordinator/']);
 
 // The path-like tokens of a Fences line: anything with a directory segment,
 // quotes and trailing punctuation stripped, URLs and the noise skipped. A bare
@@ -2641,6 +2641,34 @@ export function fenceTokens(fences) {
     if (!out.includes(t)) out.push(t);
   }
   return out;
+}
+
+// The clause openers the house Fences shape uses: a write clause claims its
+// paths; a read, exclusion or live-beside clause claims nothing.
+const WRITE_CLAUSE = /^(?:write only|writes only|write scope:|write:|in:)/i;
+const OTHER_CLAUSE = /^(?:not\b|do not\b|never\b|out:|read freely:|read only:|read:|live beside you:|the live lane\b)/i;
+
+// A prompt's claim on the tree: the tokens of its write clauses alone. A
+// clause starts at a sentence or a `;`; one with no opener continues the
+// clause before it across a `;` and claims nothing after a full stop. A Fences
+// line with no write clause keeps every token, as before, with split false so
+// the launch block can say so.
+export function fenceClaims(fences) {
+  const text = String(fences || '');
+  const claimed = [];
+  let found = false;
+  for (const sentence of text.split(/(?<=\.)\s+/)) {
+    let cls = null;
+    for (const clause of sentence.split(/;\s*/)) {
+      const c = clause.trim();
+      if (WRITE_CLAUSE.test(c)) {
+        cls = 'write';
+        found = true;
+      } else if (OTHER_CLAUSE.test(c)) cls = 'other';
+      if (cls === 'write') claimed.push(c);
+    }
+  }
+  return found ? { tokens: fenceTokens(claimed.join(' ')), split: true } : { tokens: fenceTokens(text), split: false };
 }
 
 // The token two fence lists share: the same path, or a directory of at least
@@ -2660,12 +2688,15 @@ export function fenceOverlap(a, b) {
 // the session as its first argument so nothing is pasted, grouped greedily in
 // board order so a block's fences are disjoint, a later block naming the token
 // it shares with the one above; a prompt the board holds, or whose fences meet
-// a live lane's, goes under HELD with the reason. Live is in_progress, or
-// stopped, stalled or continued with no OK yet; a finished or verified lane
-// holds nothing. Names and file names only, never prompt text. Pinned by
+// a live lane's, goes under HELD with the reason. Fences are the write clauses
+// alone (fenceClaims); a line whose Fences have none says `fences unsplit`.
+// Live is isLive: in_progress, exited, or stopped, stalled or continued with no
+// OK yet; a finished or verified lane holds nothing. Names and file names only, never prompt text. Pinned by
 // lane.test.mjs.
 export function launchBlock(rows, results, prompts, store) {
-  const tokens = (name) => fenceTokens(promptField(prompts.get(name) || '', 'Fences'));
+  const claims = (name) => fenceClaims(promptField(prompts.get(name) || '', 'Fences'));
+  const tokens = (name) => claims(name).tokens;
+  const unsplit = (name) => (claims(name).split ? null : 'fences unsplit');
   const ok = okNames(store);
   const live = results.filter((r) => isLive(r, ok)).map((r) => [r.name, tokens(r.name)]);
   const held = [];
@@ -2695,7 +2726,10 @@ export function launchBlock(rows, results, prompts, store) {
   const relOf = (name) => (results.find((r) => r.name === name) || {}).rel || `prompt-${name}.txt`;
   const cmd = (name) => `${`claude -n ${name}`.padEnd(w)} "$(cat ${relOf(name)})"`;
   const wide = Math.max(...names.map((n) => cmd(n).length));
-  const line = (name, note) => `  ${note ? `${cmd(name).padEnd(wide)}     # ${note}` : cmd(name)}`;
+  const line = (name, held) => {
+    const note = [held, unsplit(name)].filter(Boolean).join('; ');
+    return `  ${note ? `${cmd(name).padEnd(wide)}     # ${note}` : cmd(name)}`;
+  };
   const WORDS = ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
   const out = [];
   groups.forEach((g, i) => {

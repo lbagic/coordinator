@@ -15,4 +15,6 @@
 - `lanes.txt`: a `HOLD old-lane …` line where only `OK <lane> <time> <evidence>` lines may stand.
 - `github.txt`: `pr 12 DONE`, a state that is not OPEN, CLOSED or MERGED.
 
+`fences.json` holds five Fences lines of real prompts, the field alone, from the coordinator's live board of 2026-09-10: the pairs whose launch holds were measured false or right on the wrong token. `lane.test.mjs` pins which paths each line claims.
+
 The names inside both stores (lane names, decision numbers, file paths, people and tool names in the item bodies) come from an early private project of the author and mean nothing outside it; they are kept only because the tests pin the row shapes they produce.

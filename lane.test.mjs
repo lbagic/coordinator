@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync, spawn } from 'node:child_process';
-import { exited, launchBlock, EXIT_GRACE_MS, promptField, promptFaults, buildPrompt, deltaLine, latestTime, GOALS_TEMPLATE, analyze, findPrompt, nameOf, ctxTokens, windowFromModel, modelFromArgv, argsRe, render, newer, parseBoardLines, parseItem, foldStore, readStore, boardRows, nextId, mintItem, slugOf, isCoordinatorSession, question, askLine, boardData, labelFaults, parseNotify, NotifyTail, renderNotify, parseGithub, githubLine, reportPr, effortFaults, parseFields, protocolOf, setHeaderKey, scoutPrompt, HOOK_JSON, githubRefs, syncGithub, whoRows, relayText, FIELD_MAX, LANE_KINDS, fenceTokens, fenceOverlap, launchLane, peerText, gateStop, handoffDue, HANDOFF_AT, isLive, okNames, liveRow, shorthandLine, worktreeFacts, resumeRows, lastReportSection, lastDatedLine, foldMine, MINE_KEEP, settle, activeAt } from './lane.mjs';
+import { exited, launchBlock, EXIT_GRACE_MS, promptField, promptFaults, buildPrompt, deltaLine, latestTime, GOALS_TEMPLATE, analyze, findPrompt, nameOf, ctxTokens, windowFromModel, modelFromArgv, argsRe, render, newer, parseBoardLines, parseItem, foldStore, readStore, boardRows, nextId, mintItem, slugOf, isCoordinatorSession, question, askLine, boardData, labelFaults, parseNotify, NotifyTail, renderNotify, parseGithub, githubLine, reportPr, effortFaults, parseFields, protocolOf, setHeaderKey, scoutPrompt, HOOK_JSON, githubRefs, syncGithub, whoRows, relayText, FIELD_MAX, LANE_KINDS, fenceTokens, fenceOverlap, launchLane, peerText, gateStop, handoffDue, HANDOFF_AT, isLive, okNames, liveRow, shorthandLine, worktreeFacts, resumeRows, lastReportSection, lastDatedLine, foldMine, MINE_KEEP, settle, activeAt, fenceClaims } from './lane.mjs';
 
 process.env.TZ = 'UTC';
 
@@ -1012,9 +1012,9 @@ test('launch: the RUN rows as `claude -n <name> "$(cat prompt-<name>.txt)"` line
     fs.utimesSync(file, NOW / 1000 + i, NOW / 1000 + i);
   };
   assert.equal(run('launch'), 'no prompt to launch');
-  prompt('rows-bar', 'Own worktree .claude/worktrees/rows-bar from origin/main; `web/components/rows/` and web/e2e/rows.spec.ts; no dakr/.', 1);
-  prompt('docs-map', 'Own worktree under .claude/worktrees/ from origin/main; docs/architecture.md, https://github.com/x/y/issues/1 for the map; coordinator/goals.md is read', 2);
-  prompt('rows-test', 'web/components/rows/bar.test.tsx only', 3);
+  prompt('rows-bar', 'Write only `web/components/rows/` and web/e2e/rows.spec.ts, in your own worktree .claude/worktrees/rows-bar from origin/main; no dakr/.', 1);
+  prompt('docs-map', 'Write only docs/architecture.md, in your own worktree under .claude/worktrees/ from origin/main; https://github.com/x/y/issues/1 for the map. Read: coordinator/goals.md', 2);
+  prompt('rows-test', 'Write only web/components/rows/bar.test.tsx', 3);
   prompt('later', 'golib/logging/', 4);
   run('new', 'HOLD', 'later', '--after', 'docs-map');
   const out = run('launch');
@@ -1025,7 +1025,7 @@ test('launch: the RUN rows as `claude -n <name> "$(cat prompt-<name>.txt)"` line
     'RUN, after the block above (fences overlap on web/components/rows/):',
     '  claude -n rows-test "$(cat prompt-rows-test.txt)"',
     'HELD, not now:',
-    '  claude -n later     "$(cat prompt-later.txt)"         # held: #1 after docs-map',
+    '  claude -n later     "$(cat prompt-later.txt)"         # held: #1 after docs-map; fences unsplit',
   ].join('\n'));
   assert.ok(!/secret ask/.test(out), 'no prompt text');
   assert.deepEqual(fenceTokens('(`dakr/server/`, web/app/x.tsx.) README.md http://x/y e.g. main origin/main .claude/reviews/ coordinator/12-x.md CLAUDE.md'), ['dakr/server/', 'web/app/x.tsx']);
@@ -1039,14 +1039,14 @@ test('launch: the RUN rows as `claude -n <name> "$(cat prompt-<name>.txt)"` line
   assert.equal(fenceOverlap(['dakr/'], ['dakr/']), null, 'a whole top-level tree is boilerplate-grade, even shared exactly');
   assert.equal(fenceOverlap(['web/app'], ['web/apples/']), null);
   fs.rmSync(cwd, { recursive: true });
-  // live: in_progress holds; continued with an OK, finished, and exited never do
+  // live: in_progress and exited hold; continued with an OK and finished never do
   const prompts = new Map([
-    ['grid', 'Fences: own worktree from origin/main; web/components/CostOverviewCard.tsx only'],
-    ['perf', 'Fences: dakr/server/ and web/components/ from origin/main'],
-    ['done', 'Fences: web/components/ from origin/main'],
-    ['gone', 'Fences: docs/ from origin/main'],
-    ['caption', 'Fences: web/components/CostOverviewCard.tsx from origin/main'],
-    ['docs', 'Fences: docs/agents/ from origin/main'],
+    ['grid', 'Fences: Write only web/components/CostOverviewCard.tsx, in your own worktree from origin/main'],
+    ['perf', 'Fences: Write only dakr/server/ and web/components/ from origin/main'],
+    ['done', 'Fences: Write only web/components/ from origin/main'],
+    ['gone', 'Fences: Write only docs/ from origin/main'],
+    ['caption', 'Fences: Write only web/components/CostOverviewCard.tsx from origin/main'],
+    ['docs', 'Fences: Write only docs/agents/ from origin/main'],
   ]);
   const results = [lane('grid', 'in_progress', { prompt_at: T('07:00') }), lane('perf', 'continued', { closed_at: T('07:10'), moved_at: T('07:30'), report: 'REPORT perf' }), lane('done', 'finished', { closed_at: T('07:20'), report: 'REPORT done' }), lane('gone', 'exited'), lane('caption', 'not_found'), lane('docs', 'not_found')];
   const st = store([], 'OK perf 07:30 abc');
@@ -1059,6 +1059,29 @@ test('launch: the RUN rows as `claude -n <name> "$(cat prompt-<name>.txt)"` line
   const unverified = store([]);
   assert.match(launchBlock(rows(results, unverified, { prompts }), results, prompts, unverified).join('\n'), /caption "\$\(cat prompt-caption\.txt\)"     # overlaps live grid on/, 'the in_progress lane names the hold first');
   assert.match(launchBlock(rows(results.slice(1), unverified, { prompts }), results.slice(1), prompts, unverified).join('\n'), /caption "\$\(cat prompt-caption\.txt\)"     # overlaps live perf on web\/components\//, 'continued without an OK still holds');
+});
+
+test('fences are the write clauses alone: a read, exclusion or live-beside clause claims nothing; the three measured holds; a line with no write clause keeps its tokens and says so', () => {
+  const F = JSON.parse(fs.readFileSync(path.join(HERE, 'fixtures', 'fences.json'), 'utf8'));
+  const claim = (name) => fenceClaims(F[name]);
+  // manager-switchboard-brief was held on a read clause and a live-beside clause
+  assert.deepEqual(claim('manager-switchboard-brief'), { tokens: ['manager-switchboard/'], split: true });
+  assert.equal(fenceOverlap(claim('manager-switchboard-brief').tokens, claim('deny-floor-four').tokens), null);
+  // ledger-per-coder-return-implement: the right verdict, now on the right token
+  assert.deepEqual(claim('deny-floor-four').tokens, ['daemon/src/settings.ts', 'daemon/test/settings.test.ts', 'deny-floor-four/']);
+  assert.equal(fenceOverlap(claim('ledger-per-coder-return-implement').tokens, claim('deny-floor-four').tokens), 'daemon/src/settings.ts');
+  assert.ok(!claim('ledger-per-coder-return-implement').tokens.includes('daemon/src/picks.ts'), 'its Not clause claims nothing');
+  // NOTE 118 02:49: picks.ts sat only in settled-counter's do-not-touch clause
+  assert.ok(!claim('settled-counter').tokens.includes('daemon/src/picks.ts'));
+  assert.equal(fenceOverlap(claim('declared-pick-fields-implement').tokens, claim('settled-counter').tokens), null);
+  // a write clause continues across `;` and ends at a full stop
+  assert.deepEqual(fenceClaims('write only a/b.ts; c/d.ts. Base origin/main; e/f.ts is read').tokens, ['a/b.ts', 'c/d.ts']);
+  assert.deepEqual(fenceClaims('In: web/x/y.ts. Out: web/z/'), { tokens: ['web/x/y.ts'], split: true });
+  // the fallback: no write clause, today's tokens, split false
+  assert.deepEqual(fenceClaims('web/components/rows/ and golib/logging/ only; not docs/x/'), { tokens: ['web/components/rows/', 'golib/logging/', 'docs/x/'], split: false });
+  const results = [lane('legacy', 'not_found')];
+  const prompts = new Map([['legacy', 'Fences: golib/logging/ only']]);
+  assert.deepEqual(launchBlock(rows(results, store([]), { prompts }), results, prompts, store([])), ['RUN, one prompt:', '  claude -n legacy "$(cat prompt-legacy.txt)"     # fences unsplit']);
 });
 
 test('deltaLine counts efforts apart from you, live and mine', () => {
