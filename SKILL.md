@@ -138,7 +138,8 @@ Never a PR, a review, a merge, code.
 
 Board rows, by who acts: BAD (a fault in the store), RUN (a prompt to launch), ANSWER,
 DECIDE, STEP and CLOSE (sessions whose work is done) are the user's; LIVE is nobody's;
-MINE is the coordinator's next act; DONE counts verified lanes; CTX is the session's own
+MINE is the coordinator's next act, newest first, the newest three and a `digest: N
+older` row (`L board --all` prints them whole; nothing is closed by the fold); DONE counts verified lanes; CTX is the session's own
 context. A lane stopped at its gate is never on CLOSE: it is an ANSWER row until the build
 word is relayed, a LIVE row after it, and its effort row says which. The gate template
 tells the worker to end its report with that Gate sentence; the board reads it.

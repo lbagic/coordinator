@@ -86,6 +86,7 @@ export function rowSubject(row) {
     case 'MINE': {
       const id = idOf(rest);
       if (id != null) return { tag, kind: 'item', id };
+      if (rest.startsWith('digest: ')) return { tag, kind: 'none' };
       if (rest.startsWith('file: ')) return { tag, kind: 'items', ids: [...rest.matchAll(/#(\d+)/g)].map((m) => Number(m[1])) };
       const stale = /^stale: OK (\S+)/.exec(rest);
       if (stale) return { tag, kind: 'lane', name: stale[1] };

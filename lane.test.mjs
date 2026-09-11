@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { exited, launchBlock, EXIT_GRACE_MS, promptField, promptFaults, buildPrompt, deltaLine, latestTime, GOALS_TEMPLATE, analyze, findPrompt, nameOf, ctxTokens, windowFromModel, modelFromArgv, argsRe, render, newer, parseBoardLines, parseItem, foldStore, readStore, boardRows, nextId, mintItem, slugOf, isCoordinatorSession, question, askLine, boardData, labelFaults, parseNotify, NotifyTail, renderNotify, parseGithub, githubLine, reportPr, effortFaults, parseFields, protocolOf, setHeaderKey, scoutPrompt, HOOK_JSON, githubRefs, syncGithub, whoRows, relayText, FIELD_MAX, LANE_KINDS, fenceTokens, fenceOverlap, launchLane, peerText, gateStop, handoffDue, HANDOFF_AT, isLive, okNames, liveRow, shorthandLine, worktreeFacts, resumeRows, lastReportSection, lastDatedLine } from './lane.mjs';
+import { exited, launchBlock, EXIT_GRACE_MS, promptField, promptFaults, buildPrompt, deltaLine, latestTime, GOALS_TEMPLATE, analyze, findPrompt, nameOf, ctxTokens, windowFromModel, modelFromArgv, argsRe, render, newer, parseBoardLines, parseItem, foldStore, readStore, boardRows, nextId, mintItem, slugOf, isCoordinatorSession, question, askLine, boardData, labelFaults, parseNotify, NotifyTail, renderNotify, parseGithub, githubLine, reportPr, effortFaults, parseFields, protocolOf, setHeaderKey, scoutPrompt, HOOK_JSON, githubRefs, syncGithub, whoRows, relayText, FIELD_MAX, LANE_KINDS, fenceTokens, fenceOverlap, launchLane, peerText, gateStop, handoffDue, HANDOFF_AT, isLive, okNames, liveRow, shorthandLine, worktreeFacts, resumeRows, lastReportSection, lastDatedLine, foldMine, MINE_KEEP } from './lane.mjs';
 
 process.env.TZ = 'UTC';
 
@@ -583,23 +583,39 @@ test('the board: rows grouped by who acts, faults first, OK fresh only with the 
     'STEP    #3  press Stop on i  blocks: i',
     'CLOSE   h (repo-5d)  n (repo-6e)',
     'LIVE    e  repo-7c  since 09-04 23:50',
-    'MINE    d  re-verify 07:30',
     'MINE    f  exited without report, re-issue',
-    'MINE    g  verify report 07:40',
-    'MINE    i  held: #3',
-    'MINE    l  re-verify 07:58',
     'MINE    m  verify report 07:59',
-    'MINE    r14  write prompt after e  #2',
-    'MINE    #4  keep an eye on CI',
-    'MINE    stale: OK e 07:00 abc',
-    'MINE    stale: OK d 07:10 abc',
     'MINE    stale: OK m 4f2a1c',
+    'MINE    l  re-verify 07:58',
+    'MINE    g  verify report 07:40',
+    'MINE    d  re-verify 07:30',
+    'MINE    stale: OK d 07:10 abc',
+    'MINE    stale: OK e 07:00 abc',
+    'MINE    i  held: #3',
+    'MINE    #4  keep an eye on CI',
+    'MINE    r14  write prompt after e  #2',
     'DONE    1 verified, 1 filed',
     'CTX     coordinator 187K/1M  repo: 14 lanes  items 5',
   ]);
   assert.deepEqual(rows([lane('a', 'not_found')], store([], 'RUN a build')), ['RUN     prompt-a.txt', 'CTX     coordinator ?  ?: 1 lane  items 0'], 'a RUN line from an older store is read and ignored');
   assert.equal(rows([lane('b', 'stopped', { session: null, ask: 'q?', asked: true })], store([]))[0], 'ANSWER  b  ?  asked: q?');
   assert.deepEqual(rows([results[3]], store([], 'OK d 07:30 abc')), ['CLOSE   d (repo-2a)', 'CTX     coordinator ?  ?: 1 lane  items 0']);
+});
+
+test('MINE prints newest first, the newest three and one digest row of the rest by count; --all prints them whole; an unchanged board is no change', () => {
+  const notes = [1, 2, 3, 4, 5].map((id) => item(`${id}-n.md`, `NOTE note ${id}\n`));
+  const full = rows([lane('late', 'finished', { closed_at: T('07:50'), report: 'REPORT late' })], store(notes), { ctx: '90K/1M', repo: 'repo' });
+  assert.deepEqual(full.filter((r) => r.startsWith('MINE')), ['MINE    late  verify report 07:50', 'MINE    #5  note 5', 'MINE    #4  note 4', 'MINE    #3  note 3', 'MINE    #2  note 2', 'MINE    #1  note 1'], 'a lane row by activity first, then items by id, highest first');
+  assert.equal(MINE_KEEP, 3);
+  const folded = foldMine(full);
+  assert.deepEqual(folded.filter((r) => r.startsWith('MINE')), ['MINE    late  verify report 07:50', 'MINE    #5  note 5', 'MINE    #4  note 4', 'MINE    digest: 3 older, --all']);
+  assert.equal(folded.length, full.length - 2, 'three rows become one');
+  assert.equal(folded[folded.length - 1], full[full.length - 1], 'CTX stays last');
+  assert.deepEqual(foldMine(full.slice(0, 2)), full.slice(0, 2), 'three or fewer MINE rows fold nothing');
+  const again = rows([lane('late', 'finished', { closed_at: T('07:50'), report: 'REPORT late' })], store(notes), { ctx: '95K/1M', repo: 'repo' });
+  assert.match(deltaLine(full, again, '08:01', { fold: MINE_KEEP }), /· no change · /);
+  const more = rows([lane('late', 'finished', { closed_at: T('07:50'), report: 'REPORT late' })], store([item('0-old.md', 'NOTE oldest\n'), ...notes]), { repo: 'repo' });
+  assert.match(deltaLine(full, more, '08:02', { fold: MINE_KEEP }), /· \+MINE digest: 4 older, --all · -MINE digest: 3 older, --all · .*mine 7$/, 'an older row moves only the digest count; the counts stay whole');
 });
 
 test('every edge target must be a prompt file, an OK line, or a LANE item; a dangling target is a BAD row', () => {

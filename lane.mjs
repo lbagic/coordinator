@@ -16,7 +16,7 @@
 //   lane.mjs snooze <id|name> <N>d [why…]         set snooze: to today+N (0d wakes it) and log the why as a body line
 //   lane.mjs scout <effort> [--cwd DIR]           print the scout prompt for an EFFORT item
 //   lane.mjs delta [--cwd DIR]                    rewrite coordinator/board.txt, print BAD rows and one line of what changed
-//   lane.mjs board [--cwd DIR] [--json]           every row, grouped by who acts, CTX last
+//   lane.mjs board [--all] [--cwd DIR] [--json]   every row, grouped by who acts, CTX last; MINE the newest three and a digest, --all whole
 //   lane.mjs resume [--cwd DIR]                   after a restart: per live lane its worktree, uncommitted files, commits and report tail; per open STEP and DECIDE its last dated line
 //   lane.mjs check [--cwd DIR]                    the BAD rows only; exit 1 when there are any
 //   lane.mjs live [--all] [--cwd DIR]             every lane that holds something with the Fences line of its prompt, capped; --all: every launched lane
@@ -1600,28 +1600,36 @@ export function boardRows(results, store, opts = {}) {
     if (r.status === 'in_progress') out.push(row('LIVE', r.name, peer(r), `since ${clock(r.prompt_at, now)}`));
     else if (gated(r.name) && verified(r.name) && buildSent(r.name)) out.push(row('LIVE', r.name, peer(r), `building since the build word ${sentClock(buildSent(r.name))}`));
   }
+  // MINE newest first: the rows about a lane by its last activity, then the
+  // rows about an item by id, highest first. foldMine keeps the newest few.
+  const mine = [];
+  const laneAt = (r) => (r && r.status !== 'not_found' ? Date.parse(r.last_activity || r.moved_at || r.closed_at || r.stopped_at || r.prompt_at || '') || r.mtime || 0 : 0);
+  const byLane = (r, text) => mine.push({ group: 1, at: laneAt(r), text });
+  const byItem = (id, text) => mine.push({ group: 0, at: id || 0, text });
   for (const r of results) {
-    if (r.status === 'exited') out.push(row('MINE', r.name, 'exited without report, re-issue'));
-    else if (r.status === 'finished' && !verified(r.name)) out.push(row('MINE', r.name, `verify report ${latest(r)}`));
-    else if (r.status === 'continued' && !verified(r.name)) out.push(row('MINE', r.name, `re-verify ${latest(r)}`));
-    else if (r.status === 'not_found' && blockers(r.name).length) out.push(row('MINE', r.name, `held: ${holdText(r.name)}`));
+    if (r.status === 'exited') byLane(r, row('MINE', r.name, 'exited without report, re-issue'));
+    else if (r.status === 'finished' && !verified(r.name)) byLane(r, row('MINE', r.name, `verify report ${latest(r)}`));
+    else if (r.status === 'continued' && !verified(r.name)) byLane(r, row('MINE', r.name, `re-verify ${latest(r)}`));
+    else if (r.status === 'not_found' && blockers(r.name).length) byLane(r, row('MINE', r.name, `held: ${holdText(r.name)}`));
   }
   for (const it of shown) {
     if (it.kind !== 'LANE' || !it.name) continue;
     const waitsOn = [...unmet(it), ...blockers(it.name).filter((b) => b !== it).map(ref)];
-    out.push(row('MINE', it.name, `write prompt ${waitsOn.length ? `after ${waitsOn.join(' ')}` : 'now'}`, ref(it)));
+    byItem(it.id, row('MINE', it.name, `write prompt ${waitsOn.length ? `after ${waitsOn.join(' ')}` : 'now'}`, ref(it)));
   }
   for (const it of shown) {
-    if (it.kind === 'NOTE') out.push(row('MINE', ref(it), capHead(it.head) + (it.until ? `  until: ${it.until.kind} ${it.until.lane || it.until.n}` : '')));
-    else if (!KINDS.has(it.kind)) out.push(row('MINE', ref(it), capHead(it.raw)));
+    if (it.kind === 'NOTE') byItem(it.id, row('MINE', ref(it), capHead(it.head) + (it.until ? `  until: ${it.until.kind} ${it.until.lane || it.until.n}` : '')));
+    else if (!KINDS.has(it.kind)) byItem(it.id, row('MINE', ref(it), capHead(it.raw)));
   }
-  const toFile = items.filter(satisfied).map(ref);
-  if (toFile.length) out.push(row('MINE', `file: ${toFile.join(' ')}`));
+  const filable = items.filter(satisfied);
+  if (filable.length) byItem(Math.max(...filable.map((i) => i.id || 0)), row('MINE', `file: ${filable.map(ref).join(' ')}`));
   for (const l of store.lanes) {
     if (l.tag !== 'OK' || !l.name || l !== ok.get(l.name)) continue;
     const r = lanes.get(l.name);
-    if (r && !okFresh(r, l)) out.push(row('MINE', `stale: ${l.raw}`));
+    if (r && !okFresh(r, l)) byLane(r, row('MINE', `stale: ${l.raw}`));
   }
+  mine.sort((a, b) => b.group - a.group || b.at - a.at);
+  for (const m of mine) out.push(m.text);
   // A count, never the names: the names of verified lanes are what `L who
   // --all` is for, and naming them here is four fifths of the board's bytes.
   const doneNamed = results.filter((r) => verified(r.name) && !r.session_open).length;
@@ -1637,11 +1645,24 @@ export function boardRows(results, store, opts = {}) {
   return out;
 }
 
+// The MINE rows past the newest `keep` fold into one digest row. The digest
+// carries a count and no date, so it moves only when the count does and a
+// board where nothing changed is still no change. Items stay open.
+export const MINE_KEEP = 3;
+export function foldMine(rows, keep = MINE_KEEP) {
+  const at = rows.map((r, i) => (r.startsWith('MINE') ? i : -1)).filter((i) => i >= 0);
+  if (at.length <= keep) return rows;
+  const folded = new Set(at.slice(keep));
+  const out = rows.filter((_, i) => !folded.has(i));
+  out.splice(at[keep - 1] + 1, 0, `MINE    digest: ${folded.size} older, --all`);
+  return out;
+}
+
 // One line of what changed between two boards, then the counts by who acts:
 // `board <stamp> · +RUN prompt-x.txt … · -MINE x verify report 07:40 · you 2 · live 1 · mine 3`.
 // CTX is never a change. Pinned by lane.test.mjs.
-export function deltaLine(prevRows, rows, stamp) {
-  const body = (rs) => rs.filter((r) => !r.startsWith('CTX'));
+export function deltaLine(prevRows, rows, stamp, opts = {}) {
+  const body = (rs) => (opts.fold ? foldMine(rs, opts.fold) : rs).filter((r) => !r.startsWith('CTX'));
   const squash = (r) => capTo(r.replace(/\s{2,}/g, ' ').trim(), 56);
   const prev = new Set(body(prevRows || []));
   const next = new Set(body(rows));
@@ -2039,7 +2060,7 @@ function boardCommand(args) {
   if (args.json) {
     const items = store.items.map(({ body, ...it }) => it);
     console.log(JSON.stringify({ rows, items, lanes: store.lanes, results: results.map((r) => ({ name: r.name, status: r.status, session: r.session || null, peer: r.peer || null })) }));
-  } else console.log(rows.join('\n'));
+  } else console.log((args.all ? rows : foldMine(rows)).join('\n'));
   return 0;
 }
 
@@ -2574,7 +2595,7 @@ function deltaCommand(args) {
   const date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
   writeAtomic(file, `board ${path.basename(path.resolve(args.cwd || process.cwd()))} ${date} ${time}\n${rows.join('\n')}\n`);
   for (const r of rows) if (r.startsWith('BAD')) console.log(r);
-  console.log(deltaLine(prev, rows, time));
+  console.log(deltaLine(prev, rows, time, { fold: args.all ? 0 : MINE_KEEP }));
   return 0;
 }
 
@@ -2589,7 +2610,7 @@ const USAGE = [
   '       lane.mjs snooze <id|name> <N>d [why…] [--cwd DIR]',
   '       lane.mjs scout <effort> [--cwd DIR]',
   '       lane.mjs delta [--cwd DIR]',
-  '       lane.mjs board [--cwd DIR] [--json]',
+  '       lane.mjs board [--all] [--cwd DIR] [--json]',
   '       lane.mjs resume [--cwd DIR]',
   '       lane.mjs check [--cwd DIR]',
   '       lane.mjs live [--all] [--cwd DIR]',
