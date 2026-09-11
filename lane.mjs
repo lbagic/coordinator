@@ -98,9 +98,10 @@
 // A `.md` file whose name does not start with an id (goals.md, handoff.md)
 // is not an item and is never read by the board.
 // Every edge target is a lane name: a prompt file, an OK line, or a LANE
-// item. `after: <lanes>` on a LANE or HOLD waits for a fresh OK on each;
+// item. `after: <lanes>` on a LANE or HOLD waits for a fresh OK on each, on
+// a report that no longer stops at the lane's gate (a gate-stop OK is not a build);
 // `blocks: <lanes>` on any item holds those lanes while the item is open;
-// `until: ok <lane>`, `until: prompt <lane>`, `until: merged <n>` or
+// `until: ok <lane>` (the same built OK), `until: prompt <lane>`, `until: merged <n>` or
 // `until: closed <n>` closes the item by machine; an item with `on:` and no
 // `until:` closes when github.txt says its PR is merged or its issue closed.
 // A LANE closes once its prompt file or OK exists, a HOLD once every after:
@@ -1503,7 +1504,12 @@ export function boardRows(results, store, opts = {}) {
   };
   for (const n of waits.keys()) dfs(n, []);
 
-  const unmet = (it) => it.after.filter((a) => !verified(a));
+  // An edge waits for the build, not the gate stop: a lane verified at its gate
+  // has built nothing yet, so `after:` and `until: ok` read built, and a name
+  // still at its gate prints as `<lane>'s build`.
+  const built = (name) => verified(name) && !gated(name);
+  const unmet = (it) => it.after.filter((a) => !built(a));
+  const waitName = (a) => (verified(a) && gated(a) ? `${a}'s build` : a);
   // A verified implement lane's PR, from the `pr:` line of its report.
   const lanePr = (name) => {
     const r = lanes.get(name);
@@ -1569,7 +1575,7 @@ export function boardRows(results, store, opts = {}) {
     if (it.until) {
       if (it.until.kind === 'merged') return ghMerged(it.until.n);
       if (it.until.kind === 'closed') return ghClosed(it.until.n);
-      return it.until.kind === 'ok' ? verified(it.until.lane) : lanes.has(it.until.lane) || ok.has(it.until.lane);
+      return it.until.kind === 'ok' ? built(it.until.lane) : lanes.has(it.until.lane) || ok.has(it.until.lane);
     }
     if (it.kind === 'EFFORT') return effortNext(it) === null;
     if (it.on) return it.on.type === 'pr' ? ghMerged(it.on.n) : ghClosed(it.on.n);
@@ -1583,7 +1589,7 @@ export function boardRows(results, store, opts = {}) {
   const today = isoDate(now);
   const shown = open.filter((i) => !(i.snooze && i.snooze > today));
   const blockers = (lane) => open.filter((i) => i.blocks.includes(lane) || (i.kind === 'HOLD' && i.name === lane));
-  const holdText = (lane) => blockers(lane).map((b) => `${ref(b)}${b.kind === 'HOLD' && unmet(b).length ? ` after ${unmet(b).join(' ')}` : ''}`).join(', ');
+  const holdText = (lane) => blockers(lane).map((b) => `${ref(b)}${b.kind === 'HOLD' && unmet(b).length ? ` after ${unmet(b).map(waitName).join(' ')}` : ''}`).join(', ');
   const edgeText = (it) => (it.blocks.length ? `  blocks: ${it.blocks.join(' ')}` : '');
 
   // An unlaunched prompt is a RUN row with its Done when beside it, so the
@@ -1646,7 +1652,7 @@ export function boardRows(results, store, opts = {}) {
   }
   for (const it of shown) {
     if (it.kind !== 'LANE' || !it.name) continue;
-    const waitsOn = [...unmet(it), ...blockers(it.name).filter((b) => b !== it).map(ref)];
+    const waitsOn = [...unmet(it).map(waitName), ...blockers(it.name).filter((b) => b !== it).map(ref)];
     byItem(it.id, row('MINE', it.name, `write prompt ${waitsOn.length ? `after ${waitsOn.join(' ')}` : 'now'}`, ref(it)));
   }
   for (const it of shown) {

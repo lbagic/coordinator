@@ -643,6 +643,22 @@ test('a HOLD suppresses the RUN row while any after: lane lacks a fresh OK, name
   assert.ok(!released.some((r) => /held:/.test(r)));
 });
 
+test('an edge naming a gated lane waits for its build: a gate-stop OK leaves after: and until: ok unmet, the held row names the build, the post-build OK meets both', () => {
+  const GATE = 'REPORT base\nwhat: recon\n\nGated. Waiting for a message headed TO base carrying the word build.';
+  const BUILT = 'REPORT base\nwhat: built\ncommits: abc123 feat: the base';
+  const files = [item('145-h.md', 'HOLD drill-ins needs the base\nafter: base\n'), item('150-n.md', 'NOTE rebase the drill-ins\nuntil: ok base\n')];
+  const at = (report, closed) => [lane('drill-ins', 'not_found'), lane('base', 'finished', { closed_at: T(closed), report, session_open: true })];
+  const gateStop = rows(at(GATE, '03:00'), store(files, 'OK base 03:00 gate stop verified'));
+  assert.ok(gateStop.includes("MINE    drill-ins  held: #145 after base's build"), gateStop.join('\n'));
+  assert.ok(!gateStop.some((r) => r.startsWith('RUN')), 'NOTE 118: the hold must not lift on a gate-stop OK');
+  assert.ok(gateStop.includes('MINE    #150  rebase the drill-ins  until: ok base'), 'until: ok is unmet too');
+  const building = rows(at(GATE, '03:00'), store(files, 'OK base 03:00 gate stop verified\nSENT base 03:15 build'));
+  assert.ok(building.includes("MINE    drill-ins  held: #145 after base's build"));
+  const done = rows(at(BUILT, '03:50'), store(files, 'OK base 03:00 gate stop verified\nSENT base 03:15 build\nOK base 03:50 abc123'));
+  assert.ok(done.includes('RUN     prompt-drill-ins.txt'), done.join('\n'));
+  assert.ok(done.includes('MINE    file: #145 #150'));
+});
+
 test('an edge is satisfied only by a fresh OK: a lane that moves after its OK re-engages every hold and note that named it', () => {
   const st = store([item('18-h.md', 'HOLD x\nafter: y\n'), item('3-n.md', 'NOTE handed\nuntil: ok y\n')], 'OK y 07:10 abc\nRUN x build');
   const quiet = rows([lane('x', 'not_found'), lane('y', 'finished', { closed_at: T('07:10') })], st);
