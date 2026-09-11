@@ -26,7 +26,8 @@
 //                                                 one line per lane transition, Notification hook line and GitHub state change, runs until killed
 //   lane.mjs status <name> [--cwd DIR] [--json]   one-shot; exit 3 while the lane has no report
 //   lane.mjs show <id|lane> [--cwd DIR]           one item in full, or every open item naming a lane
-//   lane.mjs new KIND [name] <headline…> [--after "a b"] [--blocks "x"] [--until "ok x"] [--on "issue N"] [--size S] [--path "…"] [--source S] [--body T]
+//   lane.mjs new KIND [name] <headline…> | --head-file FILE [--body-file FILE] [--after "a b"] [--blocks "x"] [--until "ok x"] [--on "issue N"] [--size S] [--path "…"] [--source S] [--body T]
+//                                                 a headline with punctuation goes in a file: argv refuses a backtick or $(
 //   lane.mjs file <id> [--cwd DIR]                move an item to coordinator/closed/
 //   lane.mjs ctx [--session ID]                   context of the calling session: `ctx 180K/1M`; silent, exit 0, until its transcript holds a usage record
 //   every command but ctx takes --cwd DIR (default: the current directory) and --store DIR (default: <cwd>/coordinator)
@@ -1648,7 +1649,7 @@ export function deltaLine(prevRows, rows, stamp) {
 
 // ---------- commands ----------
 
-const VALUE_FLAGS = new Set(['cwd', 'poll', 'notify', 'session', 'store', 'after', 'blocks', 'until', 'source', 'body', 'ask', 'why', 'done', 'fences', 'pointers', 'kind', 'effort', 'from', 'size', 'path', 'on', 'gh-poll']);
+const VALUE_FLAGS = new Set(['head-file', 'body-file', 'cwd', 'poll', 'notify', 'session', 'store', 'after', 'blocks', 'until', 'source', 'body', 'ask', 'why', 'done', 'fences', 'pointers', 'kind', 'effort', 'from', 'size', 'path', 'on', 'gh-poll']);
 
 function parseArgs(argv) {
   const args = { _: [] };
@@ -2004,13 +2005,40 @@ function showCommand(args) {
 function newCommand(args) {
   const [, kindRaw, ...rest] = args._;
   const kind = (kindRaw || '').toUpperCase();
-  const usage = 'usage: lane.mjs new KIND [name] <headline…> [--after "a b"] [--blocks "x y"] [--until "ok x"] [--on "issue N"] [--size S|M|L] [--path "research implement"] [--source S] [--body T] [--cwd DIR]';
+  const usage = 'usage: lane.mjs new KIND [name] <headline…> | --head-file FILE [--body-file FILE] [--after "a b"] [--blocks "x y"] [--until "ok x"] [--on "issue N"] [--size S|M|L] [--path "research implement"] [--source S] [--body T] [--cwd DIR]';
   if (!KINDS.has(kind)) {
     console.error(`${usage}\nKIND is one of ${[...KINDS].join(' ')}`);
     return 1;
   }
   const name = NAMED_KINDS.has(kind) ? rest.shift() || null : null;
-  const head = rest.join(' ');
+  const fromFile = (flag) => {
+    try {
+      return fs.readFileSync(path.resolve(args.cwd || process.cwd(), String(args[flag])), 'utf8');
+    } catch (e) {
+      throw new Error(`new: --${flag} ${args[flag]}: ${e.code || e.message}`);
+    }
+  };
+  let head = rest.join(' ');
+  let fileBody = null;
+  try {
+    if (args['head-file']) {
+      if (head) {
+        console.error('new: the headline comes from --head-file or from argv, not both');
+        return 1;
+      }
+      head = (fromFile('head-file').split('\n').find((l) => l.trim()) || '').trim();
+    } else if (/`|\$\(/.test(head)) {
+      // By the time a backtick or $( inside double quotes reaches this process the
+      // shell has already run it; one that arrives unexpanded is refused before
+      // anyone copies it back into a shell.
+      console.error(`new: the headline carries ${head.includes('`') ? 'a backtick' : '$('}, which a shell runs as a command before lane.mjs sees it; write the headline to a file and pass --head-file FILE`);
+      return 1;
+    }
+    if (args['body-file']) fileBody = fromFile('body-file');
+  } catch (e) {
+    console.error(e.message);
+    return 1;
+  }
   if (NAMED_KINDS.has(kind) ? !name : !head) {
     console.error(`new: ${kind} needs a ${NAMED_KINDS.has(kind) ? 'name' : 'headline'}\n${usage}`);
     return 1;
@@ -2021,8 +2049,8 @@ function newCommand(args) {
   }
   const header = [[kind, name, head].filter(Boolean).join(' ')];
   for (const k of ['after', 'blocks', 'until', 'source', 'size', 'path', 'on']) if (args[k]) header.push(`${k}: ${String(args[k]).trim()}`);
-  let body = args.body || '';
-  if (!body && !tty.isatty(0)) {
+  let body = fileBody != null ? fileBody : args.body || '';
+  if (!body && fileBody == null && !tty.isatty(0)) {
     try {
       body = fs.readFileSync(0, 'utf8');
     } catch (e) {
@@ -2493,7 +2521,7 @@ const USAGE = [
   '       lane.mjs watch [--cwd DIR] [--poll MS] [--notify FILE] [--gh-poll MS]',
   '       lane.mjs status <name> [--cwd DIR] [--json]        exit 3: the lane has no report yet',
   '       lane.mjs show <id|lane> [--cwd DIR]',
-  '       lane.mjs new KIND [name] <headline…> [--after "a b"] [--blocks "x"] [--until "ok x"] [--on "issue N"] [--size S] [--path "…"] [--source S] [--body T]',
+  '       lane.mjs new KIND [name] <headline…> | --head-file FILE [--body-file FILE] [--after "a b"] [--blocks "x"] [--until "ok x"] [--on "issue N"] [--size S] [--path "…"] [--source S] [--body T]',
   '       lane.mjs file <id> [--cwd DIR]',
   '       lane.mjs ctx [--session ID]                     prints nothing until the session has a transcript with usage',
   'every command but ctx takes --cwd DIR (default: the current directory) and --store DIR (default: <cwd>/coordinator)',

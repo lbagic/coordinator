@@ -1075,6 +1075,32 @@ test('snooze: a date after today hides the row and CTX counts it; today or yeste
   fs.rmSync(cwd, { recursive: true });
 });
 
+test('new takes the headline and the body from files the shell never parses, and argv refuses a backtick or $( with nothing written', () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-headfile-'));
+  const dir = path.join(cwd, 'coordinator');
+  const run = (...a) => execFileSync(process.execPath, [path.join(HERE, 'lane.mjs'), ...a, '--cwd', cwd], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: HERMETIC }).trim();
+  const fails = (...a) => {
+    try {
+      run(...a);
+    } catch (e) {
+      return String(e.stderr).trim();
+    }
+    throw new Error(`expected failure: ${a.join(' ')}`);
+  };
+  run('init');
+  fs.writeFileSync(path.join(cwd, 'head.txt'), 'deploy with `ops/update.sh` after $(date)\nignored second line\n');
+  fs.writeFileSync(path.join(cwd, 'body.md'), 'why: the checkout is behind\n`just update` is the user\'s\n');
+  assert.equal(run('new', 'STEP', '--head-file', 'head.txt', '--body-file', 'body.md'), 'coordinator/1-deploy-with-ops-update-sh-after-date.md');
+  assert.equal(fs.readFileSync(path.join(dir, '1-deploy-with-ops-update-sh-after-date.md'), 'utf8'), 'STEP deploy with `ops/update.sh` after $(date)\n\nwhy: the checkout is behind\n`just update` is the user\'s\n', 'the file carries the punctuation the shell never saw');
+  const before = fs.readdirSync(dir).length;
+  assert.match(fails('new', 'STEP', 'deploy with `ops/update.sh`'), /carries a backtick, which a shell runs as a command.*--head-file FILE/);
+  assert.match(fails('new', 'NOTE', 'run $(whoami) later'), /carries \$\(/);
+  assert.match(fails('new', 'STEP', 'x', '--head-file', 'head.txt'), /from --head-file or from argv, not both/);
+  assert.match(fails('new', 'STEP', '--head-file', 'missing.txt'), /--head-file missing\.txt: ENOENT/);
+  assert.equal(fs.readdirSync(dir).length, before, 'a refused headline writes nothing');
+  fs.rmSync(cwd, { recursive: true });
+});
+
 test('the effort flow on the CLI: new EFFORT, scout, set size and path, prompt --effort --from writes the lane onto the effort, the sizing refusals, relay, did, sync through gh, init --hook', () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-effort-'));
   const dir = path.join(cwd, 'coordinator');

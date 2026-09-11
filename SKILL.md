@@ -120,7 +120,10 @@ a merge or a CI state is claimed only with `gh` output in the same turn.
 
 `coordinator/` is the state; the rules are at the top of `lane.mjs`. `L new KIND [name]
 <headline>` (body on stdin), `L set <id|name> <key> <value>`, `L show <id|lane>`,
-`L file <id>`. Kinds: EFFORT, DECIDE, STEP (the user's act), NOTE, LANE, HOLD, IDEA.
+`L file <id>`. A headline or body carrying any punctuation a shell reads — a backtick,
+`$(`, a quote — is written with the Write tool and passed as `L new KIND [name]
+--head-file FILE --body-file FILE`: the shell never parses a file, and argv refuses a
+backtick or `$(` rather than file it. Kinds: EFFORT, DECIDE, STEP (the user's act), NOTE, LANE, HOLD, IDEA.
 Any item takes `on: pr N | issue N`; `until: ok <lane> | merged N | closed N` closes it
 by machine, `L sync` refreshes GitHub now. A DECIDE or STEP stays until the answer or the
 act is in this chat; an answer that arrived elsewhere is repeated here in one line.
