@@ -389,7 +389,8 @@ test('a prompt is five fields under 2000 characters, a Kind line, the kind\'s pr
   assert.equal(promptField(text, 'Pointers'), '#10600 docs/notes.md https://x.y/z');
   assert.equal(promptField(text, 'Nope'), '');
   assert.equal(promptField('TASK x\nFences: a/\n  b/\nDone when: y\n', 'Fences'), 'a/ b/', 'an indented line continues the field above');
-  assert.match(text, /\nProtocol \(implement\): deliver the way the Fences say this repo works: a worktree and a PR .* or commits on main .* You never merge and never push/);
+  assert.match(text, /\nProtocol \(implement\): deliver the way the Fences say this repo works: a worktree and a PR .* or commits on main .* You never merge: that is the user's\. You push your own work and nothing else, by the route the Fences name: your branch and its PR, or your commits on main\. Commits and the PR are authored as the user: the repo git identity, no Co-Authored-By, no session or generated-with trailer, no AI attribution in messages or bodies\.\n/);
+  assert.doesNotMatch(text, /never push/, 'one delivery rule: goals.md has the lane push, so the protocol never forbids it');
   assert.match(text, /Instructions for you arrive headed `TO cols`; one headed `TO` another name is not yours: say so and stop/);
   assert.match(text, /\nREPORT cols\nwhat: /);
   assert.match(text, /\npr: <url>, or none\n/);
@@ -426,6 +427,10 @@ test('every kind has a protocol and its own REPORT keys; the gate, the runner, t
   assert.equal(gated.split('\n')[1], 'Kind: implement gate');
   assert.equal(gated.split('\n')[2], 'Effort: cells');
   assert.match(gated, /Ticket #10685: claim it first/);
+  for (const built of [gated, buildPrompt('cell', { ask: 'a', done: 'd' }, { kind: 'implement' })]) {
+    const protocol = built.split('\n').find((l) => l.startsWith('Protocol (implement)'));
+    assert.ok(protocol.includes("You never merge: that is the user's. You push your own work and nothing else, by the route the Fences name") && protocol.includes('no AI attribution in messages or bodies.') && !/never push/.test(protocol), 'the delivery and authorship sentences reach the built prompt, gated or not');
+  }
   assert.match(gated, /Gate: after the amendments, stop and wait\. Build only on a message headed `TO cell` that carries the word build\. Never ask for it through a question tool/);
   // The board reads that closing line, so the template dictates it.
   const sentence = 'Gated. Waiting for a message headed TO cell carrying the word build.';
