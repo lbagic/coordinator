@@ -538,6 +538,8 @@ test('who: one row per launched lane with the session name, the tty, the registr
   assert.deepEqual(who({ all: true }), ['a  services-cd  ttys003  idle  idle 1m  ~/repo', 'b  services-3a  gone  busy  idle 5s  /x', 'd  d-sessio  gone  exited  idle 1h0m  ']);
   assert.deepEqual(who({}), who({ all: true }), 'running, stopped with no OK and exited all hold something');
   assert.deepEqual(who({ ok: new Set(['b']) }).map((r) => r.split('  ')[0]), ['a', 'd'], 'a stopped lane with an OK holds nothing');
+  assert.deepEqual(who({ ok: new Set(['b', 'd']) }).map((r) => r.split('  ')[0]), ['a', 'd'], 'an exited lane holds its worktree until retire, OK or not');
+  assert.deepEqual(whoRows(results.filter((r) => r.name !== 'd'), registry, () => '', NOW, {}).map((r) => r.split('  ')[0]), ['a', 'b'], 'retire deletes the prompt file, so the lane is gone from the results');
 });
 
 test('live, who and the DONE row carry the lanes that hold something; --all carries the rest, and one wide Fences line is capped', () => {
@@ -1067,23 +1069,29 @@ test('launch: the RUN rows as `claude -n <name> "$(cat prompt-<name>.txt)"` line
   assert.equal(fenceOverlap(['dakr/'], ['dakr/']), null, 'a whole top-level tree is boilerplate-grade, even shared exactly');
   assert.equal(fenceOverlap(['web/app'], ['web/apples/']), null);
   fs.rmSync(cwd, { recursive: true });
-  // live: in_progress and exited hold; continued with an OK and finished never do
+  // live: in_progress and exited hold, an exited lane until retire whatever its
+  // OK; continued with an OK and finished never do
   const prompts = new Map([
     ['grid', 'Fences: Write only web/components/CostOverviewCard.tsx, in your own worktree from origin/main'],
     ['perf', 'Fences: Write only dakr/server/ and web/components/ from origin/main'],
     ['done', 'Fences: Write only web/components/ from origin/main'],
-    ['gone', 'Fences: Write only docs/ from origin/main'],
+    ['gone', 'Fences: Write only docs/guide/ from origin/main'],
     ['caption', 'Fences: Write only web/components/CostOverviewCard.tsx from origin/main'],
     ['docs', 'Fences: Write only docs/agents/ from origin/main'],
+    ['intro', 'Fences: Write only docs/guide/intro.md from origin/main'],
   ]);
-  const results = [lane('grid', 'in_progress', { prompt_at: T('07:00') }), lane('perf', 'continued', { closed_at: T('07:10'), moved_at: T('07:30'), report: 'REPORT perf' }), lane('done', 'finished', { closed_at: T('07:20'), report: 'REPORT done' }), lane('gone', 'exited'), lane('caption', 'not_found'), lane('docs', 'not_found')];
-  const st = store([], 'OK perf 07:30 abc');
+  const results = [lane('grid', 'in_progress', { prompt_at: T('07:00') }), lane('perf', 'continued', { closed_at: T('07:10'), moved_at: T('07:30'), report: 'REPORT perf' }), lane('done', 'finished', { closed_at: T('07:20'), report: 'REPORT done' }), lane('gone', 'exited'), lane('caption', 'not_found'), lane('docs', 'not_found'), lane('intro', 'not_found')];
+  const st = store([], 'OK perf 07:30 abc\nOK gone 07:40 def');
   assert.deepEqual(launchBlock(rows(results, st, { prompts }), results, prompts, st), [
     'RUN, one prompt:',
     '  claude -n docs    "$(cat prompt-docs.txt)"',
     'HELD, not now:',
     '  claude -n caption "$(cat prompt-caption.txt)"     # overlaps live grid on web/components/CostOverviewCard.tsx',
-  ]);
+    '  claude -n intro   "$(cat prompt-intro.txt)"       # overlaps live gone on docs/guide/',
+  ], 'an exited lane holds its fences even with an OK');
+  const retired = results.filter((r) => r.name !== 'gone');
+  const left = new Map([...prompts].filter(([name]) => name !== 'gone'));
+  assert.match(launchBlock(rows(retired, st, { prompts: left }), retired, left, st).join('\n'), /^RUN, two prompts, fences disjoint, launch together:\n.*docs.*\n.*intro/, 'retire deletes the prompt file and releases the fences');
   const unverified = store([]);
   assert.match(launchBlock(rows(results, unverified, { prompts }), results, prompts, unverified).join('\n'), /caption "\$\(cat prompt-caption\.txt\)"     # overlaps live grid on/, 'the in_progress lane names the hold first');
   assert.match(launchBlock(rows(results.slice(1), unverified, { prompts }), results.slice(1), prompts, unverified).join('\n'), /caption "\$\(cat prompt-caption\.txt\)"     # overlaps live perf on web\/components\//, 'continued without an OK still holds');

@@ -562,8 +562,10 @@ export function handoffDue(tokens, unverified) {
 
 // A lane that can still hold something: running, gone without a report, or
 // waiting on the user with no OK yet. A finished or verified lane holds
-// nothing. The one definition of live: `live`, `who`, the board's DONE count
-// and launchBlock all read it, and `--all` is how the rest is asked for.
+// nothing. An exited lane holds its worktree whatever its OK says, until
+// `retire` deletes its prompt file. The one definition of live: `live`, `who`,
+// the board's DONE count and launchBlock all read it, and `--all` is how the
+// rest is asked for.
 export function isLive(r, ok) {
   if (r.status === 'in_progress' || r.status === 'exited') return true;
   return ['stopped', 'stalled', 'continued'].includes(r.status) && !ok.has(r.name);
