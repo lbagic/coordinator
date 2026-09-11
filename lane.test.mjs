@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { exited, launchBlock, EXIT_GRACE_MS, promptField, promptFaults, buildPrompt, deltaLine, latestTime, GOALS_TEMPLATE, analyze, findPrompt, nameOf, ctxTokens, windowFromModel, modelFromArgv, argsRe, render, newer, parseBoardLines, parseItem, foldStore, readStore, boardRows, nextId, mintItem, slugOf, isCoordinatorSession, question, askLine, boardData, labelFaults, parseNotify, NotifyTail, renderNotify, parseGithub, githubLine, reportPr, effortFaults, parseFields, protocolOf, setHeaderKey, scoutPrompt, HOOK_JSON, githubRefs, syncGithub, whoRows, relayText, FIELD_MAX, LANE_KINDS, fenceTokens, fenceOverlap, launchLane, peerText, gateStop, handoffDue, HANDOFF_AT, isLive, okNames, liveRow } from './lane.mjs';
+import { exited, launchBlock, EXIT_GRACE_MS, promptField, promptFaults, buildPrompt, deltaLine, latestTime, GOALS_TEMPLATE, analyze, findPrompt, nameOf, ctxTokens, windowFromModel, modelFromArgv, argsRe, render, newer, parseBoardLines, parseItem, foldStore, readStore, boardRows, nextId, mintItem, slugOf, isCoordinatorSession, question, askLine, boardData, labelFaults, parseNotify, NotifyTail, renderNotify, parseGithub, githubLine, reportPr, effortFaults, parseFields, protocolOf, setHeaderKey, scoutPrompt, HOOK_JSON, githubRefs, syncGithub, whoRows, relayText, FIELD_MAX, LANE_KINDS, fenceTokens, fenceOverlap, launchLane, peerText, gateStop, handoffDue, HANDOFF_AT, isLive, okNames, liveRow, shorthandLine } from './lane.mjs';
 
 process.env.TZ = 'UTC';
 
@@ -979,9 +979,10 @@ test('goals.md, handoff.md and board.txt live beside the items and are never ite
     throw new Error(`expected failure: ${a.join(' ')}`);
   };
   assert.match(fails('delta'), /no coordinator\/: run lane\.mjs init first/);
-  assert.equal(run('init'), 'coordinator/\ncoordinator/goals.md: skeleton, fill it in\nnot a git repo: /coordinator/ /prompt-*.txt not excluded');
+  const L = shorthandLine(path.join(HERE, 'lane.mjs'));
+  assert.equal(run('init'), `coordinator/\ncoordinator/goals.md: skeleton, fill it in\nnot a git repo: /coordinator/ /prompt-*.txt not excluded\n${L}`);
   assert.equal(fs.readFileSync(path.join(dir, 'goals.md'), 'utf8'), GOALS_TEMPLATE);
-  assert.equal(run('init'), 'coordinator/: exists\nnot a git repo: /coordinator/ /prompt-*.txt not excluded', 'a second init writes nothing');
+  assert.equal(run('init'), `coordinator/: exists\nnot a git repo: /coordinator/ /prompt-*.txt not excluded\n${L}`, 'a second init writes nothing');
   fs.writeFileSync(path.join(dir, 'handoff.md'), 'notes\n');
   fs.writeFileSync(path.join(dir, '4-note.md'), 'NOTE a note\n');
   assert.deepEqual(readStore(cwd).items.map((i) => i.file), ['4-note.md']);
@@ -1010,6 +1011,22 @@ test('goals.md, handoff.md and board.txt live beside the items and are never ite
   assert.equal(run('live'), 'no lane holds anything: --all for every launched lane');
   assert.equal(run('live', '--all'), 'no launched lane');
   assert.deepEqual(readStore(cwd).items.map((i) => i.file), ['4-note.md'], 'board.txt and lanes.txt are not items');
+  fs.rmSync(cwd, { recursive: true });
+});
+
+test('init prints last the one line that defines L, by the absolute path of lane.mjs, and a shell that runs it reaches the tool', () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-shorthand-'));
+  execFileSync('git', ['init', '-q', cwd]);
+  const out = execFileSync(process.execPath, [path.join(HERE, 'lane.mjs'), 'init', '--cwd', cwd], { encoding: 'utf8', env: HERMETIC }).trim().split('\n');
+  const line = out[out.length - 1];
+  const m = /^L\(\) \{ node '(\/[^']+\/lane\.mjs)' "\$@"; \}$/.exec(line);
+  assert.ok(m, line);
+  assert.equal(fs.realpathSync(m[1]), fs.realpathSync(path.join(HERE, 'lane.mjs')));
+  assert.ok(!line.includes('CLAUDE_SKILL_DIR'), 'only the skill loader expands that variable');
+  const sh = spawnSync('bash', ['-c', `${line}; L help`], { encoding: 'utf8', env: HERMETIC });
+  assert.equal(sh.status, 0, sh.stderr);
+  assert.match(sh.stdout, /^usage: lane\.mjs init/);
+  assert.equal(shorthandLine("/a b/it's/lane.mjs"), `L() { node '/a b/it'\\''s/lane.mjs' "$@"; }`, 'a quote in the path survives');
   fs.rmSync(cwd, { recursive: true });
 });
 

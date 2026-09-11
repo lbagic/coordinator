@@ -12,11 +12,14 @@ The user works through you: asks arrive here, lanes (sessions the user runs) do 
 work, reports come back here. You scope every ask, the user rules it, you write the
 prompts, relay the rulings, verify what returns. You write no code and read no diff;
 your context is for the whole project, not one lane's files. `L` below is
-`node ${CLAUDE_SKILL_DIR}/lane.mjs`.
+`node ${CLAUDE_SKILL_DIR}/lane.mjs`, and that long form always works.
 
 ## Start
 
-`L init` (idempotent: the store, the goals skeleton, the git excludes), then `L delta`,
+`node ${CLAUDE_SKILL_DIR}/lane.mjs init` first (idempotent: the store, the goals skeleton,
+the git excludes). Its last line is `L() { node '<absolute path>/lane.mjs' "$@"; }`: a
+function dies with its shell call, so every later call that runs `L` starts with that
+line and a `;`. Then `L delta`,
 then read `coordinator/goals.md` and, if it exists, `coordinator/handoff.md`. A goals.md
 still holding the skeleton's placeholders: ask the user for the goals before anything else.
 Arm the watch once (it dies with the session; a resumed coordinator arms it again):

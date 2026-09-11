@@ -2167,6 +2167,14 @@ function excludeFile(cwd) {
   }
 }
 
+// The one line that makes `L` real in a shell: a function naming this file by
+// its absolute path, resolved from the module itself because only the skill
+// loader expands ${CLAUDE_SKILL_DIR}. A function dies with its shell call, so
+// the line goes at the head of every call that runs `L`.
+export function shorthandLine(file = fileURLToPath(import.meta.url)) {
+  return `L() { node '${file.replace(/'/g, "'\\''")}' "$@"; }`;
+}
+
 function initCommand(args) {
   if (args.hook) {
     console.log(HOOK_JSON);
@@ -2188,6 +2196,7 @@ function initCommand(args) {
   const wanted = [...(rel.startsWith('..') || path.isAbsolute(rel) ? [] : [`/${rel}/`]), '/prompt-*.txt'];
   if (!exclude) {
     console.log(`not a git repo: ${wanted.join(' ')} not excluded`);
+    console.log(shorthandLine());
     return 0;
   }
   let text = '';
@@ -2201,6 +2210,7 @@ function initCommand(args) {
     fs.appendFileSync(exclude, `${text.endsWith('\n') || !text ? '' : '\n'}${missing.join('\n')}\n`);
     console.log(`${path.relative(cwd, exclude)}: added ${missing.join(' ')}`);
   }
+  console.log(shorthandLine());
   return 0;
 }
 
@@ -2464,7 +2474,7 @@ function deltaCommand(args) {
 }
 
 const USAGE = [
-  'usage: lane.mjs init [--cwd DIR] | init --hook',
+  'usage: lane.mjs init [--cwd DIR] | init --hook       init prints last the line that defines L',
   '       lane.mjs prompt <name> --kind K [--effort E] [--gate] [--runner] [--force] [--from FILE] [--ask T] [--why T] [--done T] [--fences T] [--pointers T]',
   '       lane.mjs sync [--all] [--cwd DIR]',
   '       lane.mjs who [<lane>] [--all] [--cwd DIR]',
