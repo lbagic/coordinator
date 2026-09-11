@@ -1488,20 +1488,23 @@ export function boardRows(results, store, opts = {}) {
   };
   // A lane whose report ends at its gate waits for the user's build word, so
   // it is never a session to close. The word is a SENT line after the OK that
-  // verified the stop; the ledger is append-only, so order decides, and a
-  // later OK (the report the build returns) clears it.
+  // verified the stop; the ledger is append-only, so order decides. A later OK
+  // clears the word only once the lane's report no longer stops at the gate:
+  // the ledger keeps no report per OK, so an OK re-verifying the gate stop
+  // while the build runs leaves the word standing.
   const gated = (name) => {
     const r = lanes.get(name);
     return !!r && reported(r) && gateStop(r.report);
   };
   const buildSent = (name) => {
+    const stillGated = gated(name);
     let ok = false;
     let sent = null;
     for (const l of store.lanes) {
       if (l.name !== name) continue;
       if (l.tag === 'OK') {
         ok = true;
-        sent = null;
+        if (!stillGated) sent = null;
       } else if (ok && l.tag === 'SENT' && /\bbuild\b/i.test(l.rest || '')) sent = l;
     }
     return sent;

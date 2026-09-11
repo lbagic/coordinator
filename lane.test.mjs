@@ -681,6 +681,15 @@ test("a lane stopped at its gate waits on the user's build word: never a session
   assert.deepEqual(tagged(relayed, 'ANSWER'), []);
   assert.deepEqual(tagged(relayed, 'CLOSE'), []);
   assert.match(relayed.find((l) => l.startsWith('EFFORT')), /cell \(implement\) building since the build word  #1$/);
+  // A re-verification during the build (NOTE 156): an OK after the SENT line, on a
+  // report that still stops at the gate, leaves the build word standing.
+  const reverified = store([ef], 'OK cell 07:20 gate stop verified\nSENT cell 07:40 build\nOK cell 07:20 re-verified at 07:48, four commits in its worktree');
+  assert.deepEqual(tagged(rows(at(GATE, '07:20'), reverified), 'LIVE'), ['LIVE    cell  cell-ses  building since the build word 07:40']);
+  assert.deepEqual(tagged(rows(at(GATE, '07:20'), reverified), 'ANSWER'), []);
+  assert.match(rows(at(GATE, '07:20'), reverified).find((l) => l.startsWith('EFFORT')), /cell \(implement\) building since the build word  #1$/);
+  // The same ledger once the report no longer stops at the gate: the word clears.
+  assert.deepEqual(tagged(rows(at(BUILT, '07:20'), reverified), 'CLOSE'), ['CLOSE   cell (cell-ses)']);
+  assert.deepEqual(tagged(rows(at(BUILT, '07:20'), reverified), 'LIVE'), []);
   // The build's own report, verified: an ordinary finished lane again.
   const built = rows(at(BUILT, '07:50'), store([ef], 'OK cell 07:20 gate stop verified\nSENT cell 07:40 build\nOK cell 07:50 abc123 on main'));
   assert.deepEqual(tagged(built, 'CLOSE'), ['CLOSE   cell (cell-ses)']);
