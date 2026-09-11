@@ -695,6 +695,11 @@ test("a lane stopped at its gate waits on the user's build word: never a session
   // The same ledger once the report no longer stops at the gate: the word clears.
   assert.deepEqual(tagged(rows(at(BUILT, '07:20'), reverified), 'CLOSE'), ['CLOSE   cell (cell-ses)']);
   assert.deepEqual(tagged(rows(at(BUILT, '07:20'), reverified), 'LIVE'), []);
+  // The word went to a session that is gone: the coordinator's act, never LIVE.
+  const dead = rows([lane('cell', 'finished', { closed_at: T('07:20'), report: GATE, session_open: false })], store([ef], 'OK cell 07:20 gate stop verified\nSENT cell 07:40 build'));
+  assert.deepEqual(tagged(dead, 'LIVE'), []);
+  assert.deepEqual(tagged(dead, 'MINE'), ['MINE    cell  build word sent, session gone: re-issue']);
+  assert.match(dead.find((l) => l.startsWith('EFFORT')), /cell \(implement\) build word sent, session gone: re-issue  #1$/);
   // The build's own report, verified: an ordinary finished lane again.
   const built = rows(at(BUILT, '07:50'), store([ef], 'OK cell 07:20 gate stop verified\nSENT cell 07:40 build\nOK cell 07:50 abc123 on main'));
   assert.deepEqual(tagged(built, 'CLOSE'), ['CLOSE   cell (cell-ses)']);
@@ -1030,7 +1035,8 @@ test('a lane whose session is gone is exited only after the grace, so a --resume
   assert.equal(exited(res, { pid: 1 }, false, EXIT_GRACE_MS + 1), true, 'dead pid past the grace');
   assert.equal(exited(res, { pid: 1 }, true, EXIT_GRACE_MS + 1), false, 'alive');
   assert.equal(exited({ session: 's1', report: 'REPORT x' }, null, false, EXIT_GRACE_MS + 1), false, 'a reported lane is never exited');
-  assert.equal(exited(res, { pid: 0 }, false, EXIT_GRACE_MS + 1), false, 'an entry without a pid says nothing');
+  assert.equal(exited(res, { pid: 0 }, false, EXIT_GRACE_MS + 1), true, 'an entry without a pid is gone past the grace (F17: it kept a lane alive for a shift)');
+  assert.equal(exited(res, {}, false, EXIT_GRACE_MS - 1), false, 'and inside the grace a --resume may still take it');
   // The clock is the last record, not the file (NOTE 161: a touch flipped a stalled lane live for ten minutes).
   const iso = (ms) => new Date(ms).toISOString();
   const quiet = { status: 'in_progress', session: 's1', report: null, last_activity: iso(NOW - 11 * 60 * 1000) };

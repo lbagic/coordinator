@@ -672,7 +672,8 @@ export function settle(res, entry, open, now, mtime) {
 
 export function exited(res, entry, open, idleMs) {
   if (res.report) return false;
-  const gone = (!entry && !!res.session) || (!!entry && !!entry.pid && !open);
+  // An entry with no live pid is gone, and so is one that carries no pid at all.
+  const gone = (!entry && !!res.session) || (!!entry && !open);
   return gone && idleMs > EXIT_GRACE_MS;
 }
 
@@ -1557,7 +1558,7 @@ export function boardRows(results, store, opts = {}) {
         if (r.status === 'exited') return `${lane} (${kind}) exited, re-issue`;
         return `${lane} (${kind}) verify`;
       }
-      if (gated(lane)) return `${lane} (${kind}) ${buildSent(lane) ? 'building since the build word' : 'gated: waiting on your build word'}`;
+      if (gated(lane)) return `${lane} (${kind}) ${!buildSent(lane) ? 'gated: waiting on your build word' : r && !r.session_open ? 'build word sent, session gone: re-issue' : 'building since the build word'}`;
       const pr = lanePr(lane);
       if (pr && !ghMerged(pr)) return `${lane} (${kind}) PR #${pr} ${gh(pr) ? gh(pr).state.toLowerCase() : 'open'}, merge is yours`;
     }
@@ -1624,7 +1625,7 @@ export function boardRows(results, store, opts = {}) {
   if (close.length) out.push(row('CLOSE', ...close));
   for (const r of results) {
     if (r.status === 'in_progress') out.push(row('LIVE', r.name, peer(r), `since ${clock(r.prompt_at, now)}`));
-    else if (gated(r.name) && verified(r.name) && buildSent(r.name)) out.push(row('LIVE', r.name, peer(r), `building since the build word ${sentClock(buildSent(r.name))}`));
+    else if (gated(r.name) && verified(r.name) && buildSent(r.name) && r.session_open) out.push(row('LIVE', r.name, peer(r), `building since the build word ${sentClock(buildSent(r.name))}`));
   }
   // MINE newest first: the rows about a lane by its last activity, then the
   // rows about an item by id, highest first. foldMine keeps the newest few.
@@ -1637,6 +1638,8 @@ export function boardRows(results, store, opts = {}) {
     // A lane that ended its turn on a statement asked the user nothing: reading
     // it is the coordinator's act, never an ANSWER row.
     else if (r.status === 'stopped' && !r.asked) byLane(r, row('MINE', r.name, 'stopped, no question: verify or re-issue', tailText(r.tail)));
+    // The build word went to a session that is gone: nothing is building.
+    else if (gated(r.name) && verified(r.name) && buildSent(r.name) && !r.session_open) byLane(r, row('MINE', r.name, 'build word sent, session gone: re-issue'));
     else if (r.status === 'finished' && !verified(r.name)) byLane(r, row('MINE', r.name, `verify report ${latest(r)}`));
     else if (r.status === 'continued' && !verified(r.name)) byLane(r, row('MINE', r.name, `re-verify ${latest(r)}`));
     else if (r.status === 'not_found' && blockers(r.name).length) byLane(r, row('MINE', r.name, `held: ${holdText(r.name)}`));
