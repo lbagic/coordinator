@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync, spawn } from 'node:child_process';
-import { exited, launchBlock, EXIT_GRACE_MS, promptField, promptFaults, buildPrompt, deltaLine, latestTime, GOALS_TEMPLATE, analyze, findPrompt, nameOf, ctxTokens, windowFromModel, modelFromArgv, argsRe, render, newer, parseBoardLines, parseItem, foldStore, readStore, boardRows, nextId, mintItem, slugOf, isCoordinatorSession, question, askLine, boardData, labelFaults, parseNotify, NotifyTail, renderNotify, parseGithub, githubLine, reportPr, effortFaults, parseFields, protocolOf, setHeaderKey, scoutPrompt, HOOK_JSON, githubRefs, syncGithub, whoRows, relayText, FIELD_MAX, LANE_KINDS, fenceTokens, fenceOverlap, launchLane, peerText, gateStop, handoffDue, HANDOFF_AT, isLive, okNames, liveRow, shorthandLine, worktreeFacts, resumeRows, lastReportSection, lastDatedLine, foldMine, MINE_KEEP, settle, activeAt, fenceClaims } from './lane.mjs';
+import { exited, launchBlock, EXIT_GRACE_MS, promptField, promptFaults, buildPrompt, deltaLine, latestTime, GOALS_TEMPLATE, analyze, findPrompt, nameOf, ctxTokens, windowFromModel, modelFromArgv, argsRe, render, newer, parseBoardLines, parseItem, foldStore, readStore, boardRows, nextId, mintItem, slugOf, isCoordinatorSession, question, askLine, boardData, labelFaults, parseNotify, NotifyTail, renderNotify, parseGithub, githubLine, reportPr, effortFaults, parseFields, protocolOf, setHeaderKey, scoutPrompt, HOOK_JSON, githubRefs, syncGithub, whoRows, relayText, FIELD_MAX, LANE_KINDS, fenceTokens, fenceOverlap, launchLane, peerText, gateStop, handoffDue, HANDOFF_AT, isLive, okNames, liveRow, shorthandLine, worktreeFacts, resumeRows, lastReportSection, lastDatedLine, foldMine, MINE_KEEP, settle, activeAt, fenceClaims, outstandingBackground } from './lane.mjs';
 
 process.env.TZ = 'UTC';
 
@@ -922,6 +922,27 @@ test('a turn that ends without a report is stopped, with the tail; a tool_use st
   assert.equal(running.status, 'in_progress');
   const resumed = analyze([human(PROMPT), assistant('Which branch?', 'end_turn'), human('main'), assistant('ok', 'tool_use')], NAME);
   assert.equal(resumed.status, 'in_progress');
+  assert.equal(stopped.background, null);
+});
+
+// The two shapes from transcript 0ff97a7c (2026-09-11): a Bash call moved to the
+// background, and the task-notification that returns it.
+const bgLaunch = (id) => rec('user', [{ type: 'tool_result', tool_use_id: 'x', content: `Command running in background with ID: ${id}.` }], { toolUseResult: { stdout: '', stderr: '', backgroundTaskId: id } });
+const bgReturn = (id) => user(`<task-notification>\n<task-id>${id}</task-id>\n<tool-use-id>x</tool-use-id>\n<status>completed</status>\n</task-notification>`, { origin: { kind: 'task-notification' } });
+
+test('a lane that ends its turn waiting on its own background work is working, not stopped; once the work returned before the turn ended it is stopped', () => {
+  const waiting = analyze([human(PROMPT), bgLaunch('b7isgny4c'), assistant('Suite running; the notification wakes me.', 'end_turn')], NAME);
+  assert.equal(waiting.status, 'stopped');
+  assert.deepEqual(waiting.background, ['b7isgny4c']);
+  assert.equal(settle(waiting, { pid: 1 }, true, NOW, NOW - 3600000), 'in_progress', 'working, and a long wait never stalls');
+  assert.equal(settle({ ...waiting, last_activity: new Date(NOW - EXIT_GRACE_MS - 1).toISOString() }, { pid: 1 }, false, NOW, NOW), 'exited', 'a dead session is still exited');
+  const r = { ...waiting, name: NAME, status: 'in_progress', peer: 'repo-4a', stopped_at: T('07:30') };
+  assert.deepEqual(rows([r], store([])).filter((x) => /^(LIVE|ANSWER|MINE)/.test(x)), [`LIVE    ${NAME}  repo-4a  waiting on its own background work since 07:30`]);
+  const returned = analyze([human(PROMPT), bgLaunch('b7isgny4c'), bgReturn('b7isgny4c'), assistant('Suite green. Merge it?', 'end_turn')], NAME);
+  assert.equal(returned.status, 'stopped');
+  assert.equal(returned.background, null);
+  assert.equal(settle(returned, { pid: 1 }, true, NOW, NOW), 'stopped');
+  assert.deepEqual(outstandingBackground([bgLaunch('a'), bgLaunch('b'), bgReturn('a')], 0, 2), ['b']);
 });
 
 test('the report body is capped when rendered', () => {

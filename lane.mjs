@@ -400,6 +400,27 @@ export function findPrompt(records, name) {
   return found;
 }
 
+// The background tasks a turn started and had not heard back from when it
+// ended, records from..to inclusive. A launch is a tool_result record whose
+// toolUseResult carries backgroundTaskId; the return is a task-notification
+// record naming that <task-id> (both shapes read from the transcript of
+// 2026-09-11, session 0ff97a7c). A lane that ends its turn on that wait is
+// working, not stopped.
+export function outstandingBackground(records, from, to) {
+  const open = new Set();
+  for (let j = Math.max(0, from); j <= to && j < records.length; j++) {
+    const r = records[j];
+    const id = r.type === 'user' && r.toolUseResult && r.toolUseResult.backgroundTaskId;
+    if (id) open.add(String(id));
+    if (r.origin && r.origin.kind === 'task-notification') {
+      const c = r.message ? r.message.content : '';
+      const m = /<task-id>([^<]+)<\/task-id>/.exec(typeof c === 'string' ? c : JSON.stringify(c || ''));
+      if (m) open.delete(m[1].trim());
+    }
+  }
+  return [...open];
+}
+
 export function analyze(records, name) {
   const i = findPrompt(records, name);
   if (i < 0) return null;
@@ -453,7 +474,8 @@ export function analyze(records, name) {
     };
   }
   if (endTurn && endTurn.index === lastActive) {
-    return { ...base, status: 'stopped', stopped_at: endTurn.at, tail: endTurn.text.slice(-TAIL_CHARS), ask: askLine(endTurn.text), asked: question(endTurn.text) !== null, last_activity: last };
+    const background = outstandingBackground(records, i + 1, endTurn.index);
+    return { ...base, status: 'stopped', stopped_at: endTurn.at, tail: endTurn.text.slice(-TAIL_CHARS), ask: askLine(endTurn.text), asked: question(endTurn.text) !== null, background: background.length ? background : null, last_activity: last };
   }
   return { ...base, status: 'in_progress', last_activity: last };
 }
@@ -668,6 +690,7 @@ export function activeAt(res, mtime) {
 export function settle(res, entry, open, now, mtime) {
   const idle = now - activeAt(res, mtime);
   if (exited(res, entry, open, idle)) return 'exited';
+  if (res.status === 'stopped' && res.background) return 'in_progress';
   if (res.status === 'in_progress' && idle > STALL_MS) return 'stalled';
   return res.status;
 }
@@ -1656,7 +1679,7 @@ export function boardRows(results, store, opts = {}) {
   const close = results.filter((r) => verified(r.name) && r.session_open && !gated(r.name)).map((r) => `${r.name} (${peer(r)})`);
   if (close.length) out.push(row('CLOSE', ...close));
   for (const r of results) {
-    if (r.status === 'in_progress') out.push(row('LIVE', r.name, peer(r), `since ${clock(r.prompt_at, now)}`));
+    if (r.status === 'in_progress') out.push(row('LIVE', r.name, peer(r), r.background ? `waiting on its own background work since ${clock(r.stopped_at, now)}` : `since ${clock(r.prompt_at, now)}`));
     else if (gated(r.name) && verified(r.name) && buildSent(r.name) && r.session_open) out.push(row('LIVE', r.name, peer(r), `building since the build word ${sentClock(buildSent(r.name))}`));
   }
   // MINE newest first: the rows about a lane by its last activity, then the
