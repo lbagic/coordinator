@@ -9,7 +9,7 @@
 //   lane.mjs prompt <name> --kind K [--effort E] [--gate] [--runner] [--force] [--from FILE] [--ask T] [--why T] [--done T] [--fences T] [--pointers T]
 //                                                 write prompt-<name>.txt: five fields, the kind's protocol, the REPORT block
 //   lane.mjs sync [--all] [--cwd DIR]             ask GitHub about every number the ledger names, rewrite coordinator/github.txt
-//   lane.mjs who [<lane>] [--cwd DIR]             every launched lane with its session name, tty, status, idle time, cwd
+//   lane.mjs who [<lane>] [--all] [--cwd DIR]     every lane that holds something with its session name, tty, status, idle time, cwd; --all: every launched lane
 //   lane.mjs relay <lane> <text…> [--cwd DIR]     append SENT <lane> <time> <text>, print the TO-headed message and its session
 //   lane.mjs did <effort> <what…> [--cwd DIR]     append DID <effort> <time> <what>: a GitHub act the coordinator did itself
 //   lane.mjs set <id|name> <key> <value…>         rewrite one header key of an open item
@@ -18,7 +18,7 @@
 //   lane.mjs delta [--cwd DIR]                    rewrite coordinator/board.txt, print BAD rows and one line of what changed
 //   lane.mjs board [--cwd DIR] [--json]           every row, grouped by who acts, CTX last
 //   lane.mjs check [--cwd DIR]                    the BAD rows only; exit 1 when there are any
-//   lane.mjs live [--cwd DIR]                     every launched lane with the Fences line of its prompt
+//   lane.mjs live [--all] [--cwd DIR]             every lane that holds something with the Fences line of its prompt, capped; --all: every launched lane
 //   lane.mjs launch [--cwd DIR]                   the launch block: RUN prompts as `claude -n` lines grouped by disjoint fences, held ones under HELD
 //   lane.mjs ok <name> <evidence…> [--cwd DIR]    append OK <name> <time> <evidence>, time taken from the lane's report
 //   lane.mjs retire <name> <why…> [--cwd DIR]     append OK <name> <now> retired: <why> and delete the prompt file
@@ -180,6 +180,8 @@ const GH_STATES = new Set(['OPEN', 'CLOSED', 'MERGED']);
 const GH_POLL_MS = 60 * 1000;
 const HEAD_MAX = 96;
 const DONE_MAX = 60;
+// One wide Fences line must not dominate `live`.
+const FENCE_ECHO = 200;
 const SLUG_MAX = 40;
 export const FIELD_MAX = 2000;
 export const PROMPT_FIELDS = [
@@ -519,6 +521,20 @@ function ctxLine(records, entry) {
 // alone.
 export function handoffDue(tokens, unverified) {
   return tokens != null && tokens >= HANDOFF_AT && !unverified;
+}
+
+// A lane that can still hold something: running, gone without a report, or
+// waiting on the user with no OK yet. A finished or verified lane holds
+// nothing. The one definition of live: `live`, `who`, the board's DONE count
+// and launchBlock all read it, and `--all` is how the rest is asked for.
+export function isLive(r, ok) {
+  if (r.status === 'in_progress' || r.status === 'exited') return true;
+  return ['stopped', 'stalled', 'continued'].includes(r.status) && !ok.has(r.name);
+}
+
+// The lane names lanes.txt carries an OK for.
+export function okNames(store) {
+  return new Set(store.lanes.filter((l) => l.tag === 'OK' && l.name).map((l) => l.name));
 }
 
 // ---------- registry ----------
@@ -1364,6 +1380,25 @@ export const GOALS_TEMPLATE = [
   '',
 ].join('\n');
 
+// An OK is fresh only when its time is the lane's latest event, so a lane
+// that moves after its OK is unverified again.
+export function okIsFresh(r, l, now = Date.now()) {
+  if (r.status !== 'finished' && r.status !== 'continued') return false;
+  const iso = ISO_TOKEN.exec(l.rest);
+  if (iso) return iso[1] === latestInstant(r);
+  const m = TIME_TOKEN.exec(l.rest);
+  return !!m && m[1] === latestTime(r, now).slice(-5);
+}
+
+// The board's verified predicate: a fresh OK, or an OK on a lane whose prompt
+// file is gone (filed, and the watch cannot see it move any more). The page
+// names the lanes the DONE row counts by this same rule.
+export function verifiedOf(results, store, now = Date.now()) {
+  const lanes = new Map(results.map((r) => [r.name, r]));
+  const ok = new Map(store.lanes.filter((l) => l.tag === 'OK' && l.name).map((l) => [l.name, l]));
+  return (name) => ok.has(name) && (lanes.has(name) ? okIsFresh(lanes.get(name), ok.get(name), now) : true);
+}
+
 // results: one status() result per prompt file, in prompt-file mtime order.
 // store: foldStore()/readStore(). Rows come out grouped by who acts: the
 // hand-off line (HANDOFF) when one is due, faults (BAD), the user (RUN, ANSWER,
@@ -1379,16 +1414,8 @@ export function boardRows(results, store, opts = {}) {
   const ok = last('OK');
   const reported = (r) => r.status === 'finished' || r.status === 'continued';
   const latest = (r) => latestTime(r, now);
-  const okFresh = (r, l) => {
-    if (!reported(r)) return false;
-    const iso = ISO_TOKEN.exec(l.rest);
-    if (iso) return iso[1] === latestInstant(r);
-    const m = TIME_TOKEN.exec(l.rest);
-    return !!m && m[1] === latest(r).slice(-5);
-  };
-  // A fresh OK, or an OK on a lane whose prompt file is gone: filed, and the
-  // watch cannot see it move any more.
-  const verified = (name) => ok.has(name) && (lanes.has(name) ? okFresh(lanes.get(name), ok.get(name)) : true);
+  const okFresh = (r, l) => okIsFresh(r, l, now);
+  const verified = verifiedOf(results, store, now);
   const launched = (name) => lanes.has(name) && lanes.get(name).status !== 'not_found';
   const items = store.items;
   const ref = (it) => (it.id == null ? it.file : `#${it.id}`);
@@ -1583,9 +1610,11 @@ export function boardRows(results, store, opts = {}) {
     const r = lanes.get(l.name);
     if (r && !okFresh(r, l)) out.push(row('MINE', `stale: ${l.raw}`));
   }
-  const doneNamed = results.filter((r) => verified(r.name) && !r.session_open).map((r) => r.name);
+  // A count, never the names: the names of verified lanes are what `L who
+  // --all` is for, and naming them here is four fifths of the board's bytes.
+  const doneNamed = results.filter((r) => verified(r.name) && !r.session_open).length;
   const filed = [...ok.keys()].filter((n) => !lanes.has(n)).length;
-  if (doneNamed.length || filed) out.push(row('DONE', ...doneNamed, ...(filed ? [`${filed} filed`] : [])));
+  if (doneNamed || filed) out.push(row('DONE', [...(doneNamed ? [`${doneNamed} verified`] : []), ...(filed ? [`${filed} filed`] : [])].join(', ')));
   const ideas = shown.filter((i) => i.kind === 'IDEA').length;
   const extra = [`items ${shown.length - ideas}`];
   if (ideas) extra.push(`ideas ${ideas}`);
@@ -1767,13 +1796,16 @@ function syncCommand(args) {
   return 0;
 }
 
-// Rows of `who`: every launched lane with the session the human can find it
-// by. ttyOf maps a pid to its terminal. Pure.
-export function whoRows(results, registry, ttyOf, now = Date.now()) {
+// Rows of `who`: the lanes that can still hold something, with the session the
+// human can find each by. ttyOf maps a pid to its terminal. `opts.ok` is the
+// OK set isLive reads and `opts.all` prints every launched lane instead. Pure.
+export function whoRows(results, registry, ttyOf, now = Date.now(), opts = {}) {
   const bySession = new Map(registry.map((e) => [e.sessionId, e]));
+  const ok = opts.ok || new Set();
   const out = [];
   for (const r of results) {
     if (!r.session) continue;
+    if (!opts.all && !isLive(r, ok)) continue;
     const e = bySession.get(r.session);
     const cols = [r.name, r.peer || e?.name || r.session.slice(0, 8), e && e.pid ? ttyOf(e.pid) || '?' : 'gone', e ? e.status || '?' : r.status, `idle ${fmtDur(now - (r.mtime || now))}`, e && e.cwd ? e.cwd.replace(HOME, '~') : ''];
     out.push(cols.join('  '));
@@ -1795,8 +1827,14 @@ function whoCommand(args) {
   const trees = worktrees(lanes.cwd);
   const only = args._[1];
   const results = lanes.promptFiles().filter((l) => !only || l.name === only).map((lane) => lanes.status(lane, registry, trees));
-  const rows = whoRows(results, registry, ttyOf, lanes.now());
-  console.log(rows.length ? rows.join('\n') : only ? `${only}: no session holds it` : 'no launched lane');
+  const all = !!args.all || !!only;
+  const ok = okNames(readStore(lanes.cwd, args.store));
+  const rows = whoRows(results, registry, ttyOf, lanes.now(), { all, ok });
+  console.log(rows.length ? rows.join('\n') : only ? `${only}: no session holds it` : all ? 'no launched lane' : 'no lane holds anything: --all for every launched lane');
+  if (!all) {
+    const hidden = whoRows(results, registry, ttyOf, lanes.now(), { all: true, ok }).length - rows.length;
+    if (hidden > 0) console.log(`${hidden} finished, --all`);
+  }
   return 0;
 }
 
@@ -2279,22 +2317,35 @@ function retireCommand(args) {
   return 0;
 }
 
+// One row of `live`: the lane, its status, the session, and the prompt's Fences
+// line capped so one wide claim cannot dominate the output. Pure.
+export function liveRow(name, r, fences) {
+  return `${name}  ${r.status}  ${r.peer || (r.session || '?').slice(0, 8)}  fences: ${fences ? capTo(fences, FENCE_ECHO) : '(no Fences line)'}`;
+}
+
 function liveCommand(args) {
   const lanes = new Lanes(args.cwd || process.cwd(), { store: args.store });
   const registry = readRegistry();
   const trees = worktrees(lanes.cwd);
+  const ok = okNames(readStore(lanes.cwd, args.store));
   let n = 0;
+  let hidden = 0;
   for (const lane of lanes.promptFiles()) {
     const r = lanes.status(lane, registry, trees);
     if (r.status === 'not_found') continue;
+    if (!args.all && !isLive(r, ok)) {
+      hidden++;
+      continue;
+    }
     let fences = '';
     try {
       fences = promptField(fs.readFileSync(lane.file, 'utf8'), 'Fences');
     } catch {}
-    console.log(`${lane.name}  ${r.status}  ${r.peer || (r.session || '?').slice(0, 8)}  fences: ${fences || '(no Fences line)'}`);
+    console.log(liveRow(lane.name, r, fences));
     n++;
   }
-  if (!n) console.log('no launched lane');
+  if (!n) console.log(args.all ? 'no launched lane' : 'no lane holds anything: --all for every launched lane');
+  if (hidden) console.log(`${hidden} finished, --all`);
   return 0;
 }
 
@@ -2340,9 +2391,8 @@ export function fenceOverlap(a, b) {
 // lane.test.mjs.
 export function launchBlock(rows, results, prompts, store) {
   const tokens = (name) => fenceTokens(promptField(prompts.get(name) || '', 'Fences'));
-  const ok = new Set(store.lanes.filter((l) => l.tag === 'OK' && l.name).map((l) => l.name));
-  const isLive = (r) => r.status === 'in_progress' || (['stopped', 'stalled', 'continued'].includes(r.status) && !ok.has(r.name));
-  const live = results.filter(isLive).map((r) => [r.name, tokens(r.name)]);
+  const ok = okNames(store);
+  const live = results.filter((r) => isLive(r, ok)).map((r) => [r.name, tokens(r.name)]);
   const held = [];
   for (const r of rows) {
     const m = /^MINE\s+(\S+)  (held: .*)$/.exec(r);
@@ -2417,7 +2467,7 @@ const USAGE = [
   'usage: lane.mjs init [--cwd DIR] | init --hook',
   '       lane.mjs prompt <name> --kind K [--effort E] [--gate] [--runner] [--force] [--from FILE] [--ask T] [--why T] [--done T] [--fences T] [--pointers T]',
   '       lane.mjs sync [--all] [--cwd DIR]',
-  '       lane.mjs who [<lane>] [--cwd DIR]',
+  '       lane.mjs who [<lane>] [--all] [--cwd DIR]',
   '       lane.mjs relay <lane> <text…> [--cwd DIR]',
   '       lane.mjs did <effort> <what…> [--cwd DIR]',
   '       lane.mjs set <id|name> <key> <value…> [--cwd DIR]',
@@ -2426,7 +2476,7 @@ const USAGE = [
   '       lane.mjs delta [--cwd DIR]',
   '       lane.mjs board [--cwd DIR] [--json]',
   '       lane.mjs check [--cwd DIR]',
-  '       lane.mjs live [--cwd DIR]',
+  '       lane.mjs live [--all] [--cwd DIR]',
   '       lane.mjs launch [--cwd DIR]',
   '       lane.mjs ok <name> <evidence…> [--cwd DIR]',
   '       lane.mjs retire <name> <why…> [--cwd DIR]',

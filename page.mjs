@@ -30,7 +30,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { boardData, mangle, promptField, parseItem, PROMPT_FIELDS, BOARD_FILE, GOALS_FILE, CLOSED_DIR } from './lane.mjs';
+import { boardData, verifiedOf, mangle, promptField, parseItem, PROMPT_FIELDS, BOARD_FILE, GOALS_FILE, CLOSED_DIR } from './lane.mjs';
 
 const PORT_BASE = 7300;
 const PORT_SPAN = 500;
@@ -95,8 +95,9 @@ export function rowSubject(row) {
       return { tag, kind: 'lane', name: cols[0] };
     }
     case 'DONE': {
-      const filed = cols.find((c) => /^\d+ filed$/.test(c));
-      return { tag, kind: 'lanes', names: cols.filter((c) => c !== filed), filed: filed ? parseInt(filed, 10) : 0 };
+      // A count: the lanes behind it are named from the data, not the row.
+      const n = (word) => Number((new RegExp(`(\\d+) ${word}`).exec(rest) || [0, 0])[1]);
+      return { tag, kind: 'lanes', names: [], verified: n('verified'), filed: n('filed') };
     }
     default:
       return { tag, kind: 'none' };
@@ -290,7 +291,9 @@ export function rowDetail(subject, data) {
       const fileNames = new Set(data.results.map((r) => r.name));
       const filed = subject.filed ? [...new Set(data.lanes.filter((l) => l.tag === 'OK' && l.name && !fileNames.has(l.name)).map((l) => l.name))] : [];
       const lane = (n) => `<div class="sec"><h4>${esc(n)}</h4>${laneDetail(n, data)}</div>`;
-      return `<div class="detail">${subject.names.map(lane).join('')}${filed.length ? `<div class="sec"><h4>${filed.length} filed: an OK line each, no prompt file</h4><ul class="refs">${filed.map((n) => `<li>${linked(data.lanes.filter((l) => l.tag === 'OK' && l.name === n).pop().raw)}</li>`).join('')}</ul></div>` : ''}</div>`;
+      const verified = subject.verified ? verifiedOf(data.results, { lanes: data.lanes }) : null;
+      const names = verified ? data.results.filter((r) => verified(r.name) && !r.session_open).map((r) => r.name) : subject.names;
+      return `<div class="detail">${names.map(lane).join('')}${filed.length ? `<div class="sec"><h4>${filed.length} filed: an OK line each, no prompt file</h4><ul class="refs">${filed.map((n) => `<li>${linked(data.lanes.filter((l) => l.tag === 'OK' && l.name === n).pop().raw)}</li>`).join('')}</ul></div>` : ''}</div>`;
     }
     default:
       return '';

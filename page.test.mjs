@@ -325,8 +325,8 @@ test('every row names its subject from the row text: a lane, an item, several la
   assert.deepEqual(sub('MINE    z  write prompt'), { tag: 'MINE', kind: 'item', id: 4, name: 'z' });
   assert.deepEqual(sub('MINE    #3'), { tag: 'MINE', kind: 'item', id: 3 });
   assert.deepEqual(sub('MINE    stale'), { tag: 'MINE', kind: 'lane', name: 'w' });
-  assert.deepEqual(sub('DONE'), { tag: 'DONE', kind: 'lanes', names: ['d'], filed: 1 });
-  assert.deepEqual(rowSubject('DONE    15 filed'), { tag: 'DONE', kind: 'lanes', names: [], filed: 15 });
+  assert.deepEqual(sub('DONE'), { tag: 'DONE', kind: 'lanes', names: [], verified: 1, filed: 1 }, 'the DONE row is a count; the page names the lanes from the data');
+  assert.deepEqual(rowSubject('DONE    15 filed'), { tag: 'DONE', kind: 'lanes', names: [], verified: 0, filed: 15 });
   assert.deepEqual(rowSubject('MINE    file: #6 #7'), { tag: 'MINE', kind: 'items', ids: [6, 7] });
   assert.deepEqual(sub('CTX'), { tag: 'CTX', kind: 'none' });
   assert.deepEqual(rowSubject('BAD     #6 names unknown lane'), { tag: 'BAD', kind: 'none' });

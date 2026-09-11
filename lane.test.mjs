@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { exited, launchBlock, EXIT_GRACE_MS, promptField, promptFaults, buildPrompt, deltaLine, latestTime, GOALS_TEMPLATE, analyze, findPrompt, nameOf, ctxTokens, windowFromModel, modelFromArgv, argsRe, render, newer, parseBoardLines, parseItem, foldStore, readStore, boardRows, nextId, mintItem, slugOf, isCoordinatorSession, question, askLine, boardData, labelFaults, parseNotify, NotifyTail, renderNotify, parseGithub, githubLine, reportPr, effortFaults, parseFields, protocolOf, setHeaderKey, scoutPrompt, HOOK_JSON, githubRefs, syncGithub, whoRows, relayText, FIELD_MAX, LANE_KINDS, fenceTokens, fenceOverlap, launchLane, peerText, gateStop, handoffDue, HANDOFF_AT } from './lane.mjs';
+import { exited, launchBlock, EXIT_GRACE_MS, promptField, promptFaults, buildPrompt, deltaLine, latestTime, GOALS_TEMPLATE, analyze, findPrompt, nameOf, ctxTokens, windowFromModel, modelFromArgv, argsRe, render, newer, parseBoardLines, parseItem, foldStore, readStore, boardRows, nextId, mintItem, slugOf, isCoordinatorSession, question, askLine, boardData, labelFaults, parseNotify, NotifyTail, renderNotify, parseGithub, githubLine, reportPr, effortFaults, parseFields, protocolOf, setHeaderKey, scoutPrompt, HOOK_JSON, githubRefs, syncGithub, whoRows, relayText, FIELD_MAX, LANE_KINDS, fenceTokens, fenceOverlap, launchLane, peerText, gateStop, handoffDue, HANDOFF_AT, isLive, okNames, liveRow } from './lane.mjs';
 
 process.env.TZ = 'UTC';
 
@@ -501,7 +501,32 @@ test('githubRefs names every number an open item or a reported lane points at; s
 test('who: one row per launched lane with the session name, the tty, the registry status, the idle time and the cwd; a lane whose process is gone says so', () => {
   const registry = [{ sessionId: 'a-session-id', pid: 11, name: 'services-cd', status: 'idle', cwd: `${os.homedir()}/repo` }, { sessionId: 'b-session-id', name: 'services-3a', status: 'busy', cwd: '/x' }];
   const results = [lane('a', 'in_progress', { peer: 'services-cd', mtime: NOW - 90000 }), lane('b', 'stopped', { peer: 'services-3a' }), lane('c', 'not_found', { session: null }), lane('d', 'exited', { mtime: NOW - 3600000 })];
-  assert.deepEqual(whoRows(results, registry, (pid) => (pid === 11 ? 'ttys003' : ''), NOW), ['a  services-cd  ttys003  idle  idle 1m  ~/repo', 'b  services-3a  gone  busy  idle 5s  /x', 'd  d-sessio  gone  exited  idle 1h0m  ']);
+  const who = (opts) => whoRows(results, registry, (pid) => (pid === 11 ? 'ttys003' : ''), NOW, opts);
+  assert.deepEqual(who({ all: true }), ['a  services-cd  ttys003  idle  idle 1m  ~/repo', 'b  services-3a  gone  busy  idle 5s  /x', 'd  d-sessio  gone  exited  idle 1h0m  ']);
+  assert.deepEqual(who({}), who({ all: true }), 'running, stopped with no OK and exited all hold something');
+  assert.deepEqual(who({ ok: new Set(['b']) }).map((r) => r.split('  ')[0]), ['a', 'd'], 'a stopped lane with an OK holds nothing');
+});
+
+test('live, who and the DONE row carry the lanes that hold something; --all carries the rest, and one wide Fences line is capped', () => {
+  const results = [
+    lane('running', 'in_progress', { peer: 'repo-1a', session_open: true, prompt_at: T('07:00') }),
+    lane('asking', 'stopped', { peer: 'repo-2b', session_open: true, ask: 'which branch?', asked: true }),
+    lane('done', 'finished', { peer: 'repo-3c', closed_at: T('07:40'), report: 'REPORT done' }),
+  ];
+  const st = store([], 'OK done 07:40 4f2a1c');
+  const ok = okNames(st);
+  assert.deepEqual(results.map((r) => isLive(r, ok)), [true, true, false]);
+  const registry = [{ sessionId: 'running-session-id', pid: 11, name: 'repo-1a', status: 'busy', cwd: '/x' }];
+  const who = (opts) => whoRows(results, registry, () => 'ttys001', NOW, { ok, ...opts }).map((r) => r.split('  ')[0]);
+  assert.deepEqual(who({}), ['running', 'asking'], 'a finished lane with a fresh OK holds nothing');
+  assert.deepEqual(who({ all: true }), ['running', 'asking', 'done']);
+  const board = rows(results, st, { ctx: '120K/1M', repo: 'repo' });
+  assert.ok(board.includes('DONE    1 verified'), board.join('\n'));
+  assert.ok(!board.some((r) => r.startsWith('DONE') && r.includes('done')), 'the DONE row names no lane');
+  const wide = `daemon/src/pool.ts daemon/src/dispatch.ts ${'x/y/very-long-path-'.repeat(20)}`;
+  const row = liveRow('running', results[0], wide);
+  assert.ok(row.endsWith('…') && row.length === 'running  in_progress  repo-1a  fences: '.length + 200, String(row.length));
+  assert.equal(liveRow('running', results[0], ''), 'running  in_progress  repo-1a  fences: (no Fences line)');
 });
 
 test('a relayed ruling is the user\'s text under a TO heading; SENT and DID lines are lanes.txt tags the board accepts', () => {
@@ -569,7 +594,7 @@ test('the board: rows grouped by who acts, faults first, OK fresh only with the 
     'MINE    stale: OK e 07:00 abc',
     'MINE    stale: OK d 07:10 abc',
     'MINE    stale: OK m 4f2a1c',
-    'DONE    k  1 filed',
+    'DONE    1 verified, 1 filed',
     'CTX     coordinator 187K/1M  repo: 14 lanes  items 5',
   ]);
   assert.deepEqual(rows([lane('a', 'not_found')], store([], 'RUN a build')), ['RUN     prompt-a.txt', 'CTX     coordinator ?  ?: 1 lane  items 0'], 'a RUN line from an older store is read and ignored');
@@ -692,7 +717,7 @@ test('lanes.txt is only OK, SENT and DID; the last OK per lane wins, so re-verif
   const out = rows([lane('x', 'continued', { closed_at: T('07:10'), moved_at: T('07:30') })], st);
   assert.deepEqual(out.filter((r) => r.startsWith('BAD')), ["BAD     lanes.txt: 'HOLD y until Stop' is not OK|SENT|DID <lane> <time> <text>", "BAD     lanes.txt: 'OK' is not OK|SENT|DID <lane> <time> <text>"]);
   assert.ok(!out.some((r) => /stale:/.test(r)));
-  assert.ok(out.includes('DONE    x'));
+  assert.ok(out.includes('DONE    1 verified'), 'the DONE row is a count; `who --all` carries the names');
 });
 
 test('unknown kinds print their raw first line as MINE beside the fault, so nothing a human wrote vanishes', () => {
@@ -982,7 +1007,8 @@ test('goals.md, handoff.md and board.txt live beside the items and are never ite
   assert.ok(!fs.existsSync(path.join(dir, 'prompt-cols.txt')));
   assert.match(fails('prompt', 'cols', '--kind', 'implement', '--ask', 'x', '--done', 'y'), /cols already has an OK/);
   assert.match(run('delta'), /· -RUN prompt-cols\.txt implement rows show it · you 0 · live 0 · mine 1$/);
-  assert.equal(run('live'), 'no launched lane');
+  assert.equal(run('live'), 'no lane holds anything: --all for every launched lane');
+  assert.equal(run('live', '--all'), 'no launched lane');
   assert.deepEqual(readStore(cwd).items.map((i) => i.file), ['4-note.md'], 'board.txt and lanes.txt are not items');
   fs.rmSync(cwd, { recursive: true });
 });

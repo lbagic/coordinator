@@ -88,7 +88,7 @@ commits on main) is a Fences line taken from `delivery` in goals.md, not a templ
 
 ## Sessions and rulings
 
-`L who` maps every launched lane to its session name, tty and state. A ruling, an
+`L who` maps every lane that still holds something to its session name, tty and state; `--all` adds the finished ones. A ruling, an
 answer or the word build never goes by hand: `L relay <lane> "<the user's line, verbatim>"`,
 then send what it prints with `SendMessage to: <the session it names>`. A lane at its gate
 keeps its session until the word is said. Quote, never
