@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { exited, launchBlock, EXIT_GRACE_MS, promptField, promptFaults, buildPrompt, deltaLine, latestTime, GOALS_TEMPLATE, analyze, findPrompt, nameOf, ctxTokens, windowFromModel, modelFromArgv, argsRe, render, newer, parseBoardLines, parseItem, foldStore, readStore, boardRows, nextId, mintItem, slugOf, isCoordinatorSession, question, askLine, boardData, labelFaults, parseNotify, NotifyTail, renderNotify, parseGithub, githubLine, reportPr, effortFaults, parseFields, protocolOf, setHeaderKey, scoutPrompt, HOOK_JSON, githubRefs, syncGithub, whoRows, relayText, FIELD_MAX, LANE_KINDS, fenceTokens, fenceOverlap, launchLane, peerText, gateStop, handoffDue, HANDOFF_AT, isLive, okNames, liveRow, shorthandLine, worktreeFacts, resumeRows, lastReportSection, lastDatedLine, foldMine, MINE_KEEP } from './lane.mjs';
+import { exited, launchBlock, EXIT_GRACE_MS, promptField, promptFaults, buildPrompt, deltaLine, latestTime, GOALS_TEMPLATE, analyze, findPrompt, nameOf, ctxTokens, windowFromModel, modelFromArgv, argsRe, render, newer, parseBoardLines, parseItem, foldStore, readStore, boardRows, nextId, mintItem, slugOf, isCoordinatorSession, question, askLine, boardData, labelFaults, parseNotify, NotifyTail, renderNotify, parseGithub, githubLine, reportPr, effortFaults, parseFields, protocolOf, setHeaderKey, scoutPrompt, HOOK_JSON, githubRefs, syncGithub, whoRows, relayText, FIELD_MAX, LANE_KINDS, fenceTokens, fenceOverlap, launchLane, peerText, gateStop, handoffDue, HANDOFF_AT, isLive, okNames, liveRow, shorthandLine, worktreeFacts, resumeRows, lastReportSection, lastDatedLine, foldMine, MINE_KEEP, settle, activeAt } from './lane.mjs';
 
 process.env.TZ = 'UTC';
 
@@ -500,7 +500,7 @@ test('githubRefs names every number an open item or a reported lane points at; s
 
 test('who: one row per launched lane with the session name, the tty, the registry status, the idle time and the cwd; a lane whose process is gone says so', () => {
   const registry = [{ sessionId: 'a-session-id', pid: 11, name: 'services-cd', status: 'idle', cwd: `${os.homedir()}/repo` }, { sessionId: 'b-session-id', name: 'services-3a', status: 'busy', cwd: '/x' }];
-  const results = [lane('a', 'in_progress', { peer: 'services-cd', mtime: NOW - 90000 }), lane('b', 'stopped', { peer: 'services-3a' }), lane('c', 'not_found', { session: null }), lane('d', 'exited', { mtime: NOW - 3600000 })];
+  const results = [lane('a', 'in_progress', { peer: 'services-cd', mtime: NOW, active: NOW - 90000 }), lane('b', 'stopped', { peer: 'services-3a' }), lane('c', 'not_found', { session: null }), lane('d', 'exited', { mtime: NOW - 3600000 })];
   const who = (opts) => whoRows(results, registry, (pid) => (pid === 11 ? 'ttys003' : ''), NOW, opts);
   assert.deepEqual(who({ all: true }), ['a  services-cd  ttys003  idle  idle 1m  ~/repo', 'b  services-3a  gone  busy  idle 5s  /x', 'd  d-sessio  gone  exited  idle 1h0m  ']);
   assert.deepEqual(who({}), who({ all: true }), 'running, stopped with no OK and exited all hold something');
@@ -1031,6 +1031,14 @@ test('a lane whose session is gone is exited only after the grace, so a --resume
   assert.equal(exited(res, { pid: 1 }, true, EXIT_GRACE_MS + 1), false, 'alive');
   assert.equal(exited({ session: 's1', report: 'REPORT x' }, null, false, EXIT_GRACE_MS + 1), false, 'a reported lane is never exited');
   assert.equal(exited(res, { pid: 0 }, false, EXIT_GRACE_MS + 1), false, 'an entry without a pid says nothing');
+  // The clock is the last record, not the file (NOTE 161: a touch flipped a stalled lane live for ten minutes).
+  const iso = (ms) => new Date(ms).toISOString();
+  const quiet = { status: 'in_progress', session: 's1', report: null, last_activity: iso(NOW - 11 * 60 * 1000) };
+  assert.equal(settle(quiet, { pid: 1 }, true, NOW, NOW), 'stalled', 'a file touched now, a last record eleven minutes old');
+  assert.equal(settle({ ...quiet, last_activity: iso(NOW - 60 * 1000) }, { pid: 1 }, true, NOW, NOW - 3600000), 'in_progress', 'a fresh record, an old mtime');
+  assert.equal(settle({ ...quiet, last_activity: null }, { pid: 1 }, true, NOW, NOW - 11 * 60 * 1000), 'stalled', 'no record timestamp: the mtime is the fallback');
+  assert.equal(settle(quiet, { pid: 1 }, false, NOW, NOW), 'exited', 'the grace runs on the record clock too');
+  assert.equal(activeAt({ last_activity: '2026-09-05T07:00:00Z' }, NOW), Date.parse('2026-09-05T07:00:00Z'));
   assert.equal(latestTime({ status: 'finished', closed_at: T('07:40') }, NOW), '07:40');
   assert.equal(latestTime({ status: 'continued', closed_at: T('07:40'), moved_at: T('07:55') }, NOW), '07:55');
 });

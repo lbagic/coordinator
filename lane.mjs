@@ -653,6 +653,23 @@ class Transcripts {
 // A lane with no report whose session is gone (no registry entry for it, or
 // a dead pid) is exited only once its transcript has been idle past the
 // grace: a `--resume` brings the session back under a new pid.
+// The instant a lane last did something: its last transcript record's
+// timestamp, the file's mtime only when no record carries one. A touch that
+// appends nothing moves no status.
+export function activeAt(res, mtime) {
+  return Date.parse(res.last_activity || '') || mtime;
+}
+
+// The status the transcript alone cannot give: exited once the session is gone
+// past the grace, stalled once in progress and idle past STALL_MS, both on
+// activeAt's clock.
+export function settle(res, entry, open, now, mtime) {
+  const idle = now - activeAt(res, mtime);
+  if (exited(res, entry, open, idle)) return 'exited';
+  if (res.status === 'in_progress' && idle > STALL_MS) return 'stalled';
+  return res.status;
+}
+
 export function exited(res, entry, open, idleMs) {
   if (res.report) return false;
   const gone = (!entry && !!res.session) || (!!entry && !!entry.pid && !open);
@@ -749,9 +766,8 @@ export class Lanes {
       if (this.own && res.session === this.own) continue;
       const entry = bySession.get(res.session) || hint;
       const open = !!(entry && entry.pid && alive(entry.pid));
-      const r = { ...res, name: lane.name, file, mtime: t.mtime, worker_ctx: ctxLine(t.records, entry), peer: entry ? entry.name || null : null, registry: entry ? entry.status || 'unknown' : null, session_open: open };
-      if (exited(res, entry, open, this.now() - t.mtime)) r.status = 'exited';
-      if (r.status === 'in_progress' && this.now() - t.mtime > STALL_MS) r.status = 'stalled';
+      const r = { ...res, name: lane.name, file, mtime: t.mtime, active: activeAt(res, t.mtime), worker_ctx: ctxLine(t.records, entry), peer: entry ? entry.name || null : null, registry: entry ? entry.status || 'unknown' : null, session_open: open };
+      r.status = settle(res, entry, open, this.now(), t.mtime);
       if (!best || newer(r, best)) best = r;
     }
     if (best) this.adopted.set(lane.name, best.file);
@@ -834,7 +850,7 @@ export function render(r, coordCtx, now = Date.now()) {
     case 'in_progress':
       return `${head}  ${who}  prompt ${fmtTs(r.prompt_at)}  registry ${r.registry || '?'}`;
     case 'stalled':
-      return `${head}  ${who}  idle ${fmtDur(now - r.mtime)}  registry ${r.registry || '?'}  worker ctx ${r.worker_ctx}`;
+      return `${head}  ${who}  idle ${fmtDur(now - (r.active || r.mtime))}  registry ${r.registry || '?'}  worker ctx ${r.worker_ctx}`;
     case 'exited':
       return [`${head}  ${who}  no report, session gone  worker ctx ${r.worker_ctx}`, ...(r.tail ? ['  --- last message ---', indent(r.tail.trim()), '  ---'] : [])].join('\n');
     case 'stopped':
@@ -1597,7 +1613,7 @@ export function boardRows(results, store, opts = {}) {
   out.push(...runnable);
   for (const r of results) {
     if (r.status === 'stopped' && r.asked) out.push(row('ANSWER', r.name, peer(r), `asked: ${r.ask || ''}`));
-    else if (r.status === 'stalled') out.push(row('ANSWER', r.name, peer(r), `idle ${fmtDur(now - r.mtime)}, no activity`));
+    else if (r.status === 'stalled') out.push(row('ANSWER', r.name, peer(r), `idle ${fmtDur(now - (r.active || r.mtime))}, no activity`));
     else if (r.status === 'continued' && r.session_open && r.asked && !verified(r.name)) out.push(row('ANSWER', r.name, peer(r), `after report: ${r.ask}`));
     else if (gated(r.name) && verified(r.name) && !buildSent(r.name)) out.push(row('ANSWER', r.name, peer(r), 'gated: waiting on your build word'));
   }
@@ -1919,7 +1935,7 @@ export function whoRows(results, registry, ttyOf, now = Date.now(), opts = {}) {
     if (!r.session) continue;
     if (!opts.all && !isLive(r, ok)) continue;
     const e = bySession.get(r.session);
-    const cols = [r.name, r.peer || e?.name || r.session.slice(0, 8), e && e.pid ? ttyOf(e.pid) || '?' : 'gone', e ? e.status || '?' : r.status, `idle ${fmtDur(now - (r.mtime || now))}`, e && e.cwd ? e.cwd.replace(HOME, '~') : ''];
+    const cols = [r.name, r.peer || e?.name || r.session.slice(0, 8), e && e.pid ? ttyOf(e.pid) || '?' : 'gone', e ? e.status || '?' : r.status, `idle ${fmtDur(now - (r.active || r.mtime || now))}`, e && e.cwd ? e.cwd.replace(HOME, '~') : ''];
     out.push(cols.join('  '));
   }
   return out;
