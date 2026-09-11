@@ -193,6 +193,8 @@ Pointers token naming an item id are still refused.
 - `new EFFORT <name> <headline> [--size S|M|L] [--path "…"] [--on "issue N"]`
 - `new KIND [name] --head-file FILE [--body-file FILE]`: the headline is the file's first line and the body the other file's text, so neither passes through a shell; an argv headline carrying a backtick or `$(` is refused; stdin is read only under `--stdin` or `--body -`, so a pipe nobody closes never blocks it
 - `set <id|name> <key> <value>`: rewrite one header key of an item
+- `done <id> <evidence…>`: append `DONE <date> <hh:mm> <evidence>` to the body and file the item; a lane name is refused, pointing at `ok`
+- `note <id> <text…>`: append `UPDATE <date> <hh:mm> <text>` to the body; the item stays open
 - `sync`: refresh `github.txt` from GitHub and print what changed
 - `who [<lane>] [--all]`: session name, tty, status, idle, cwd per lane that holds something
 - `resume`: per live lane its worktree (the session's cwd), uncommitted files, commits ahead of the base and report tail; per open STEP and DECIDE its last dated line; a git read that fails prints `(unreadable)`

@@ -123,7 +123,8 @@ a merge or a CI state is claimed only with `gh` output in the same turn.
 
 `coordinator/` is the state; the rules are at the top of `lane.mjs`. `L new KIND [name]
 <headline>` (body via `--body-file FILE`, or `--stdin`), `L set <id|name> <key> <value>`, `L show <id|lane>`,
-`L file <id>`. A headline or body carrying any punctuation a shell reads — a backtick,
+`L file <id>`, `L done <id> <evidence>` (a dated DONE line, then filed: how a STEP or
+DECIDE closes), `L note <id> <text>` (a dated UPDATE line, still open). A headline or body carrying any punctuation a shell reads — a backtick,
 `$(`, a quote — is written with the Write tool and passed as `L new KIND [name]
 --head-file FILE --body-file FILE`: the shell never parses a file, and argv refuses a
 backtick or `$(` rather than file it. Kinds: EFFORT, DECIDE, STEP (the user's act), NOTE, LANE, HOLD, IDEA.

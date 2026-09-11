@@ -29,6 +29,8 @@
 //   lane.mjs show <id|lane> [--cwd DIR]           one item in full, or every open item naming a lane
 //   lane.mjs new KIND [name] <headline…> | --head-file FILE [--body-file FILE] [--after "a b"] [--blocks "x"] [--until "ok x"] [--on "issue N"] [--size S] [--path "…"] [--source S] [--body T | --stdin]
 //                                                 a headline with punctuation goes in a file: argv refuses a backtick or $(; stdin is read only under --stdin or --body -
+//   lane.mjs done <id> <evidence…> [--cwd DIR]    append `DONE <date> <hh:mm> <evidence>` to the item's body and file it; the STEP and DECIDE counterpart of ok
+//   lane.mjs note <id> <text…> [--cwd DIR]        append `UPDATE <date> <hh:mm> <text>` to the item's body; it stays open
 //   lane.mjs file <id> [--cwd DIR]                move an item to coordinator/closed/
 //   lane.mjs ctx [--session ID]                   context of the calling session: `ctx 180K/1M`; silent, exit 0, until its transcript holds a usage record
 //   every command but ctx takes --cwd DIR (default: the current directory) and --store DIR (default: <cwd>/coordinator)
@@ -2081,6 +2083,42 @@ function setCommand(args) {
 }
 
 // today+N as a `snooze:` date through `set`, then the why as a body line.
+// A dated line appended to an item's body, which the board never reads: `DONE`
+// closes the item with its evidence and files it, `UPDATE` leaves it open.
+// Header keys are untouched, and a lane is closed with `ok`, never here.
+function bodyLineCommand(args, verb) {
+  const [, what, ...rest] = args._;
+  if (!what || !rest.length) {
+    console.error(`usage: lane.mjs ${verb} <id> <${verb === 'done' ? 'evidence' : 'text'}…> [--cwd DIR]`);
+    return 1;
+  }
+  const cwd = path.resolve(args.cwd || process.cwd());
+  const dir = storeDir(cwd, args.store);
+  if (!/^#?\d+$/.test(what)) {
+    const store = readStore(cwd, args.store);
+    const lane = fs.existsSync(path.join(dir, `prompt-${what}.txt`)) || store.lanes.some((l) => l.name === what) || store.items.some((i) => NAMED_KINDS.has(i.kind) && i.name === what);
+    console.error(lane ? `${verb}: ${what} is a lane; a lane closes with lane.mjs ok ${what} <evidence…>` : `${verb}: '${what}' is not an item id`);
+    return 1;
+  }
+  const hit = findItem(dir, what);
+  if (!hit) {
+    console.error(`${verb}: no open item ${what.startsWith('#') ? what : `#${what}`}`);
+    return 1;
+  }
+  const now = Date.now();
+  const line = `${verb === 'done' ? 'DONE' : 'UPDATE'} ${isoDate(now)} ${clock(now, now)} ${rest.join(' ')}`;
+  const text = hit.text.trimEnd();
+  fs.writeFileSync(hit.file, `${text}${/\n\s*\n/.test(text) ? '\n' : '\n\n'}${line}\n`);
+  const out = [line];
+  if (verb === 'done') {
+    fs.mkdirSync(path.join(dir, CLOSED_DIR), { recursive: true });
+    fs.renameSync(hit.file, path.join(dir, CLOSED_DIR, hit.item.file));
+    out.push(`${STORE_DIR}/${CLOSED_DIR}/${hit.item.file}`);
+  }
+  console.log(out.join('\n'));
+  return 0;
+}
+
 function snoozeCommand(args) {
   const [, what, days, ...why] = args._;
   const dm = /^(\d+)d$/.exec(days || '');
@@ -2714,6 +2752,8 @@ const USAGE = [
   '       lane.mjs status <name> [--cwd DIR] [--json]        exit 3: the lane has no report yet',
   '       lane.mjs show <id|lane> [--cwd DIR]',
   '       lane.mjs new KIND [name] <headline…> | --head-file FILE [--body-file FILE] [--after "a b"] [--blocks "x"] [--until "ok x"] [--on "issue N"] [--size S] [--path "…"] [--source S] [--body T | --stdin]',
+  '       lane.mjs done <id> <evidence…> [--cwd DIR]',
+  '       lane.mjs note <id> <text…> [--cwd DIR]',
   '       lane.mjs file <id> [--cwd DIR]',
   '       lane.mjs ctx [--session ID]                     prints nothing until the session has a transcript with usage',
   'every command but ctx takes --cwd DIR (default: the current directory) and --store DIR (default: <cwd>/coordinator)',
@@ -2777,6 +2817,10 @@ async function main() {
       return showCommand(args);
     case 'new':
       return newCommand(args);
+    case 'done':
+      return bodyLineCommand(args, 'done');
+    case 'note':
+      return bodyLineCommand(args, 'note');
     case 'file':
       return fileCommand(args);
     case 'ctx':

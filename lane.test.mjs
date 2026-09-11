@@ -1213,6 +1213,33 @@ test('retire prints the re-issue block from the worktree the session sat in: its
   for (const d of [home, repo, wt, bin]) fs.rmSync(d, { recursive: true, force: true });
 });
 
+test('done closes a STEP with a dated evidence line and files it; note appends a dated UPDATE and leaves it open; neither touches a header key, and a lane name points at ok', () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-done-'));
+  const dir = path.join(cwd, 'coordinator');
+  const res = (...a) => spawnSync(process.execPath, [path.join(HERE, 'lane.mjs'), ...a, '--cwd', cwd], { encoding: 'utf8', env: HERMETIC });
+  res('init');
+  fs.writeFileSync(path.join(dir, '198-deploy.md'), 'STEP deploy first\nblocks: drill-ins\n');
+  fs.writeFileSync(path.join(dir, '199-pick.md'), 'DECIDE merge or rebase?\nsource: user 09:10\n\nthe options\n');
+  fs.writeFileSync(path.join(dir, 'prompt-grid.txt'), 'TASK grid\n');
+  const noted = res('note', '199', 'user leans rebase');
+  assert.equal(noted.status, 0, noted.stderr);
+  assert.match(noted.stdout, /^UPDATE \d{4}-\d\d-\d\d \d\d:\d\d user leans rebase\n$/);
+  const pick = fs.readFileSync(path.join(dir, '199-pick.md'), 'utf8');
+  assert.match(pick, /^DECIDE merge or rebase\?\nsource: user 09:10\n\nthe options\nUPDATE \d{4}-\d\d-\d\d \d\d:\d\d user leans rebase\n$/);
+  assert.deepEqual(parseItem('199-pick.md', pick).bad, [], 'the header keys are untouched');
+  const done = res('done', '#198', 'deployed 536fc3d, health green');
+  assert.equal(done.status, 0, done.stderr);
+  assert.match(done.stdout, /^DONE \d{4}-\d\d-\d\d \d\d:\d\d deployed 536fc3d, health green\ncoordinator\/closed\/198-deploy\.md\n$/);
+  assert.ok(!fs.existsSync(path.join(dir, '198-deploy.md')));
+  assert.match(fs.readFileSync(path.join(dir, 'closed', '198-deploy.md'), 'utf8'), /^STEP deploy first\nblocks: drill-ins\n\nDONE \d{4}-\d\d-\d\d \d\d:\d\d deployed 536fc3d, health green\n$/);
+  assert.deepEqual(readStore(cwd).items.map((i) => i.id), [199], 'note left 199 open, done filed 198');
+  const lane = res('done', 'grid', 'shipped');
+  assert.equal(lane.status, 1);
+  assert.equal(lane.stderr.trim(), 'done: grid is a lane; a lane closes with lane.mjs ok grid <evidence…>');
+  assert.match(res('note', '404', 'x').stderr, /no open item #404/);
+  fs.rmSync(cwd, { recursive: true });
+});
+
 test('snooze: a date after today hides the row and CTX counts it; today or yesterday shows it again; delta reports the vanish and the return; snooze Nd sets the date and logs the why; a bad date is a fault', () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-snooze-'));
   const dir = path.join(cwd, 'coordinator');
