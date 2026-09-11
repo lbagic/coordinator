@@ -201,6 +201,14 @@ Pointers token naming an item id are still refused.
 - `watch [--gh-poll MS]`: as before, plus GitHub transitions
 - `retire <name> <why>`: as before, and the lane leaves its effort's `lanes:` key
 
+## 5b. The hand-off
+
+Past 350K of the session's own context the coordinator starts looking for a hand-off; the board prints the HANDOFF row on the first turn with nothing unverified, and that row is the moment to hand off: everything is on disk, `handoff.md` only for what no item holds. The board is
+the only place it prints, and the row carries no context figure so a delta reports it once
+rather than on every turn the context grows. `HANDOFF_AT` is the one constant; a lane
+result that is neither unlaunched nor in progress and carries no fresh OK is the
+unverified work that holds the moment back.
+
 ## 6. What is out
 
 No migration tool: every change is additive and an older ledger parses unchanged. A LANE

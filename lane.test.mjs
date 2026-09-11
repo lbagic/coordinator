@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { exited, launchBlock, EXIT_GRACE_MS, promptField, promptFaults, buildPrompt, deltaLine, latestTime, GOALS_TEMPLATE, analyze, findPrompt, nameOf, ctxTokens, windowFromModel, modelFromArgv, argsRe, render, newer, parseBoardLines, parseItem, foldStore, readStore, boardRows, nextId, mintItem, slugOf, isCoordinatorSession, question, askLine, boardData, labelFaults, parseNotify, NotifyTail, renderNotify, parseGithub, githubLine, reportPr, effortFaults, parseFields, protocolOf, setHeaderKey, scoutPrompt, HOOK_JSON, githubRefs, syncGithub, whoRows, relayText, FIELD_MAX, LANE_KINDS, fenceTokens, fenceOverlap, launchLane, peerText, gateStop } from './lane.mjs';
+import { exited, launchBlock, EXIT_GRACE_MS, promptField, promptFaults, buildPrompt, deltaLine, latestTime, GOALS_TEMPLATE, analyze, findPrompt, nameOf, ctxTokens, windowFromModel, modelFromArgv, argsRe, render, newer, parseBoardLines, parseItem, foldStore, readStore, boardRows, nextId, mintItem, slugOf, isCoordinatorSession, question, askLine, boardData, labelFaults, parseNotify, NotifyTail, renderNotify, parseGithub, githubLine, reportPr, effortFaults, parseFields, protocolOf, setHeaderKey, scoutPrompt, HOOK_JSON, githubRefs, syncGithub, whoRows, relayText, FIELD_MAX, LANE_KINDS, fenceTokens, fenceOverlap, launchLane, peerText, gateStop, handoffDue, HANDOFF_AT } from './lane.mjs';
 
 process.env.TZ = 'UTC';
 
@@ -826,6 +826,26 @@ test('the window comes from the model id, and the model id from argv', () => {
   assert.equal(windowFromModel('claude-opus-5[1m]'), 1000000);
   assert.equal(windowFromModel('claude-fable-5-1'), 200000);
   assert.equal(windowFromModel(null), null);
+});
+
+test('the hand-off is due past 350K of the session\'s own context with nothing left to verify, and the three documents carry one rule', () => {
+  const live = [lane('a', 'not_found'), lane('e', 'in_progress', { peer: 'repo-7c', session_open: true, prompt_at: T('23:50', '2026-09-04') })];
+  const st = store([]);
+  assert.equal(HANDOFF_AT, 350000);
+  assert.equal(rows(live, st, { ctx: '360K/1M', ctxTokens: 360000, repo: 'repo' })[0], 'HANDOFF  hand off now  past 350K with nothing unverified: everything is on disk; handoff.md only for what no item holds');
+  assert.ok(!rows(live, st, { ctxTokens: 349999 }).some((r) => r.startsWith('HANDOFF')), 'below the threshold the row is absent');
+  assert.ok(!rows(live, st, {}).some((r) => r.startsWith('HANDOFF')), 'a context it cannot read is never due');
+  const held = [...live, lane('g', 'finished', { closed_at: T('07:40'), report: 'REPORT g' })];
+  assert.ok(!rows(held, store([]), { ctxTokens: 360000 }).some((r) => r.startsWith('HANDOFF')), 'a report left to verify holds the moment back');
+  assert.ok(rows(held, store([], 'OK g 07:40 abc'), { ctxTokens: 360000 }).some((r) => r.startsWith('HANDOFF')), 'once it is verified the moment arrives');
+  assert.ok(deltaLine(rows(live, st, { ctxTokens: 360000, ctx: '360K/1M' }), rows(live, st, { ctxTokens: 390000, ctx: '390K/1M' }), '08:00').includes('no change'), 'the row carries no number, so a growing context is not a change');
+  assert.deepEqual([handoffDue(400000, false), handoffDue(400000, true), handoffDue(null, false), handoffDue(349999, false)], [true, false, false, false]);
+  for (const f of ['SKILL.md', 'README.md', 'DESIGN.md']) {
+    const text = fs.readFileSync(path.join(HERE, f), 'utf8');
+    assert.ok(text.includes("Past 350K of the session's own context the coordinator starts looking for a hand-off"), `${f} carries the 350K rule`);
+    assert.ok(text.includes('nothing unverified'), `${f} names the condition`);
+    assert.ok(!/300\s?[kK]\b/.test(text), `${f} no longer names a 300K threshold`);
+  }
 });
 
 test('an unlaunched prompt is a RUN row with its Done when beside it; a name with an OK is never launched again', () => {

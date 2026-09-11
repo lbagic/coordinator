@@ -136,5 +136,5 @@ word is relayed, a LIVE row after it, and its effort row says which. The gate te
 tells the worker to end its report with that Gate sentence; the board reads it.
 `L delta` counts them as you, live and mine. A turn that changed the ledger or received
 an event ends with `L delta`: the BAD rows, if any, and one line of what changed. `L board` prints the board whole; `page.mjs
---serve` renders it. Past 300k context, the first turn with nothing unverified hands
-off: everything is on disk; `handoff.md` only for what no item holds.
+--serve` renders it. Past 350K of the session's own context the coordinator starts looking for a hand-off; the board prints the HANDOFF row on the first turn with nothing unverified, and that row is the moment to hand off: everything is on disk, `handoff.md` only for what no item holds. The threshold is the session's
+own context, the first number the CTX row prints, never a fraction of its window.

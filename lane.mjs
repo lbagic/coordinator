@@ -152,6 +152,11 @@ const PROJECTS = path.join(HOME, '.claude', 'projects');
 const SESSIONS = path.join(HOME, '.claude', 'sessions');
 const SETTINGS = path.join(HOME, '.claude', 'settings.json');
 const DEFAULT_WINDOW = 1000000;
+// Past this many of the session's own context tokens the coordinator starts
+// looking for a hand-off; the board prints the HANDOFF row on the first turn
+// with nothing unverified. A constant of the session's own context, not a
+// fraction of its window: a 1M session does not hand off at 300K.
+export const HANDOFF_AT = 350000;
 const POLL_MS = 2000;
 const NOTIFY_LOG = path.join(HOME, '.claude', 'coordinator', 'notify.log');
 const STALL_MS = 10 * 60 * 1000;
@@ -509,6 +514,13 @@ function ctxLine(records, entry) {
   return n == null ? '?' : `${short(n)}/${short(ctxWindow(records, entry))}`;
 }
 
+// The good moment for a hand-off: past HANDOFF_AT with nothing unverified.
+// Unknown context is never due, so a session with no usage record yet is left
+// alone.
+export function handoffDue(tokens, unverified) {
+  return tokens != null && tokens >= HANDOFF_AT && !unverified;
+}
+
 // ---------- registry ----------
 
 function alive(pid) {
@@ -732,13 +744,21 @@ export class Lanes {
   }
 
   coordinatorCtx() {
-    if (!this.own) return null;
-    const f = findTranscript(this.own, this.cwd);
-    if (!f) return null;
-    const t = this.transcripts.read(f);
+    const t = this.coordinatorTranscript();
     if (!t) return null;
     const entry = readRegistry().find((e) => e.sessionId === this.own) || null;
     return ctxLine(t.records, entry);
+  }
+
+  coordinatorCtxTokens() {
+    const t = this.coordinatorTranscript();
+    return t ? ctxTokens(t.records) : null;
+  }
+
+  coordinatorTranscript() {
+    if (!this.own) return null;
+    const f = findTranscript(this.own, this.cwd);
+    return (f && this.transcripts.read(f)) || null;
   }
 
   // Live sessions in this repo or its worktrees whose transcript ran
@@ -1345,9 +1365,10 @@ export const GOALS_TEMPLATE = [
 ].join('\n');
 
 // results: one status() result per prompt file, in prompt-file mtime order.
-// store: foldStore()/readStore(). Rows come out grouped by who acts: faults
-// first (BAD), the user (RUN, ANSWER, DECIDE, STEP, CLOSE), nobody (LIVE), the
-// coordinator (MINE), nobody (DONE), then CTX. CLOSE and DONE are one line each.
+// store: foldStore()/readStore(). Rows come out grouped by who acts: the
+// hand-off line (HANDOFF) when one is due, faults (BAD), the user (RUN, ANSWER,
+// DECIDE, STEP, CLOSE), nobody (LIVE), the coordinator (MINE), nobody (DONE),
+// then CTX. CLOSE and DONE are one line each.
 export function boardRows(results, store, opts = {}) {
   const prompts = opts.prompts || new Map();
   const now = opts.now || Date.now();
@@ -1515,6 +1536,14 @@ export function boardRows(results, store, opts = {}) {
     runnable.push(row('RUN', `prompt-${r.name}.txt`, ...(kind ? [kind] : []), ...(done ? [capTo(done, DONE_MAX)] : [])));
   }
   const out = [];
+  // The hand-off line: the session's own context past HANDOFF_AT and no report
+  // of another session's work left to verify. It carries no number, so `delta`
+  // reports it once, on the turn the moment arrives, and not again as the
+  // context grows.
+  const unverified = results.some((r) => !verified(r.name) && r.status !== 'not_found' && r.status !== 'in_progress');
+  if (handoffDue(opts.ctxTokens == null ? null : opts.ctxTokens, unverified)) {
+    out.push(row('HANDOFF', 'hand off now', `past ${short(HANDOFF_AT)} with nothing unverified: everything is on disk; handoff.md only for what no item holds`));
+  }
   for (const b of bad) out.push(row('BAD', b));
   out.push(...runnable);
   for (const r of results) {
@@ -1649,7 +1678,7 @@ export function boardData(args) {
       prompts.set(r.name, fs.readFileSync(r.prompt_file, 'utf8'));
     } catch {}
   }
-  const rows = boardRows(results, store, { ctx: lanes.coordinatorCtx(), prompts, repo: path.basename(lanes.cwd), coordinators: lanes.coordinators(registry, trees), watches: watchCount() });
+  const rows = boardRows(results, store, { ctx: lanes.coordinatorCtx(), ctxTokens: lanes.coordinatorCtxTokens(), prompts, repo: path.basename(lanes.cwd), coordinators: lanes.coordinators(registry, trees), watches: watchCount() });
   return { rows, results, store, prompts };
 }
 

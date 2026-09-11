@@ -129,6 +129,10 @@ corpus; the names in it mean nothing outside that project (see `fixtures/README.
 The board's last row, CTX, reads your own `~/.claude`: the context of the session you
 run it from and the number of watches on the machine.
 
+Past 350K of the session's own context the coordinator starts looking for a hand-off; the board prints the HANDOFF row on the first turn with nothing unverified, and that row is the moment to hand off: everything is on disk, `handoff.md` only for what no item holds. The row
+carries no number, so the one line of what changed prints it once, on the turn the moment
+arrives.
+
 ## Layout
 
 ```
