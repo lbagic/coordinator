@@ -2462,7 +2462,7 @@ function okCommand(args) {
 function retireCommand(args) {
   const [, name, ...rest] = args._;
   if (!name || !rest.length) {
-    console.error('usage: lane.mjs retire <name> <why…> [--cwd DIR]');
+    console.error('usage: lane.mjs retire <name> <why…> [--force] [--cwd DIR]');
     return 1;
   }
   if (!NAME_RE.test(name)) {
@@ -2478,9 +2478,19 @@ function retireCommand(args) {
     console.error(`retire: no lane named ${name}`);
     return 1;
   }
+  // A retire appends an OK, and an OK satisfies every edge that names the lane:
+  // refuse while an open item waits on it, unless --force.
+  const edges = store.items
+    .map((it) => [it, [...(it.after.includes(name) ? [`after: ${it.after.join(' ')}`] : []), ...(it.blocks.includes(name) ? [`blocks: ${it.blocks.join(' ')}`] : []), ...(it.until && it.until.lane === name ? [`until: ${it.until.kind} ${name}`] : [])]])
+    .filter(([, keys]) => keys.length)
+    .map(([it, keys]) => `#${it.id} ${it.kind}${it.name ? ` ${it.name}` : ''}  ${keys.join('  ')}`);
+  if (edges.length && !args.force) {
+    console.error([`retire: ${edges.length === 1 ? 'an open item waits' : 'open items wait'} on ${name}, and the retire's OK would satisfy ${edges.length === 1 ? 'it' : 'them'}:`, ...edges.map((e) => `  ${e}`), 're-point or file the item first, or retire --force'].join('\n'));
+    return 1;
+  }
   const line = `OK ${name} ${nowIso()} retired: ${rest.join(' ')}`;
   appendLane(dir, line);
-  const out = [line];
+  const out = [line, ...edges.map((e) => `warning: still names ${name}: ${e}`)];
   for (const f of files) {
     try {
       fs.unlinkSync(f);
@@ -2661,7 +2671,7 @@ const USAGE = [
   '       lane.mjs live [--all] [--cwd DIR]',
   '       lane.mjs launch [--cwd DIR]',
   '       lane.mjs ok <name> <evidence…> [--cwd DIR]',
-  '       lane.mjs retire <name> <why…> [--cwd DIR]',
+  '       lane.mjs retire <name> <why…> [--force] [--cwd DIR]',
   '       lane.mjs watch [--cwd DIR] [--poll MS] [--notify FILE] [--gh-poll MS]',
   '       lane.mjs status <name> [--cwd DIR] [--json]        exit 3: the lane has no report yet',
   '       lane.mjs show <id|lane> [--cwd DIR]',

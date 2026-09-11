@@ -1133,6 +1133,30 @@ test('init prints last the one line that defines L, by the absolute path of lane
   fs.rmSync(cwd, { recursive: true });
 });
 
+test('retire refuses while an open item waits on the lane through after:, until: or blocks:, appends nothing and names the item; --force retires and warns', () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-retire-'));
+  const dir = path.join(cwd, 'coordinator');
+  const res = (...a) => spawnSync(process.execPath, [path.join(HERE, 'lane.mjs'), ...a, '--cwd', cwd], { encoding: 'utf8', env: HERMETIC });
+  res('init');
+  fs.writeFileSync(path.join(dir, 'prompt-deny-floor-four.txt'), 'TASK deny-floor-four\n');
+  fs.writeFileSync(path.join(dir, '189-hold.md'), 'HOLD worker-reset-after-needs-human the third engine lane waits\nafter: deny-floor-four\n');
+  fs.writeFileSync(path.join(dir, '190-n.md'), 'NOTE rebase after it\nuntil: ok deny-floor-four\n');
+  fs.writeFileSync(path.join(dir, '191-ef.md'), 'EFFORT floor the floor\nsize: S\npath: implement\nlanes: implement=deny-floor-four\n');
+  const lanesTxt = () => (fs.existsSync(path.join(dir, 'lanes.txt')) ? fs.readFileSync(path.join(dir, 'lanes.txt'), 'utf8') : '');
+  const refused = res('retire', 'deny-floor-four', 'session gone');
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /open items wait on deny-floor-four[^]*#189 HOLD worker-reset-after-needs-human  after: deny-floor-four[^]*#190 NOTE  until: ok deny-floor-four[^]*retire --force/);
+  assert.ok(!/191/.test(refused.stderr), "an EFFORT's lanes: key is not an edge");
+  assert.equal(lanesTxt(), '', 'a refused retire appends nothing');
+  assert.ok(fs.existsSync(path.join(dir, 'prompt-deny-floor-four.txt')));
+  const forced = res('retire', 'deny-floor-four', 'session gone', '--force');
+  assert.equal(forced.status, 0, forced.stderr);
+  assert.match(forced.stdout, /^OK deny-floor-four \S+ retired: session gone\nwarning: still names deny-floor-four: #189 HOLD worker-reset-after-needs-human  after: deny-floor-four\nwarning: still names deny-floor-four: #190 NOTE  until: ok deny-floor-four\n/);
+  assert.match(forced.stdout, /coordinator\/191-ef\.md: lanes: none/);
+  assert.equal(lanesTxt().split('\n').filter(Boolean).length, 1, 'still exactly one OK line');
+  fs.rmSync(cwd, { recursive: true });
+});
+
 test('snooze: a date after today hides the row and CTX counts it; today or yesterday shows it again; delta reports the vanish and the return; snooze Nd sets the date and logs the why; a bad date is a fault', () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-snooze-'));
   const dir = path.join(cwd, 'coordinator');
