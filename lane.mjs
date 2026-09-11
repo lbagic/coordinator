@@ -42,14 +42,15 @@
 // typed by a human (pasted prompt, bare or as a slash command's argument) or
 // inside a tool_result after a typed message naming `prompt-<name>.txt`, bare
 // or as a slash command's argument (the worker read the file), or a peer
-// message carrying the argv launch line `claude -n <name> "$(cat
-// [coordinator/]prompt-<name>.txt)"` with both names the lane's: that is one
-// session launching another. Text inside a Write tool input (the session that
-// wrote the file), a task notification, any other peer message, a skill
-// expansion, or a sidechain never adopts, and a session that ran /coordinator
-// never adopts. A typed `TASK <other>` line, a typed message naming another
-// prompt file, or a peer launch line for another lane, ends the lane's part
-// of the transcript. The worker is finished when an assistant text block after the
+// message adopting by the same two rules, or carrying the argv launch line
+// `claude -n <name> "$(cat [coordinator/]prompt-<name>.txt)"` with both names
+// the lane's: that is one session launching another. Text inside a Write tool
+// input (the session that wrote the file), a task notification, a relay (a
+// peer message under a `TO` heading, whatever it quotes), any other peer
+// message, a skill expansion, or a sidechain never adopts, and a session that
+// ran /coordinator never adopts. A `TASK <other>` line or a message naming
+// another prompt file, typed or from a peer that is not a relay, or a peer
+// launch line for another lane, ends the lane's part of the transcript. The worker is finished when an assistant text block after the
 // prompt has a line that is exactly `REPORT <name>`; the last such block is the
 // report. It is continued when a later turn ended after that block, with a
 // user message between the two; a tool result is not a turn boundary, and a
@@ -250,6 +251,12 @@ const ANY_ARGS = new RegExp(ARGS_HEAD + "([^\\s'\"`),.:;]+)" + ARGS_TAIL, 'm');
 // name and another lane's file names neither.
 const LAUNCH_RE = /claude -n ([a-z0-9][a-z0-9-]*)\b[^\n]*?\bcat\s+(?:[\w.-]+\/)*prompt-([a-z0-9][a-z0-9-]*)\.txt/;
 
+// A message addressed under a `TO <lane>` heading: a relayed ruling, never a
+// launch.
+export function isRelay(text) {
+  return /^\s*TO\s+\S+/.test(text || '');
+}
+
 export function launchLane(text) {
   const m = LAUNCH_RE.exec(text || '');
   return m && m[1] === m[2] ? m[1] : null;
@@ -371,11 +378,14 @@ export function findPrompt(records, name) {
   const args = argsRe(name);
   let found = -1;
   for (let i = 0; i < records.length; i++) {
-    // A peer adopts only through the launch line: the coordinator starting a
-    // lane in a session it did not open. Every other peer message is talk.
+    // A peer adopts by the rules a typed message does — the launch line, the
+    // TASK line, or the prompt file named and then read — so the coordinator
+    // can start a lane in a session the user opened. A relay (a `TO` heading)
+    // is talk whatever it quotes, and so is every other peer message.
     const p = peerText(records[i]);
     if (p) {
-      if (launchLane(p) === name) found = i;
+      if (launchLane(p) === name || (!isRelay(p) && task.test(p))) found = i;
+      else if (!isRelay(p) && args.test(p) && records.slice(i + 1).some((r) => task.test(toolResultText(r)))) found = i;
       continue;
     }
     const t = humanText(records[i]);
@@ -434,7 +444,7 @@ export function analyze(records, name) {
   for (let j = i + 1; j < end; j++) {
     const p = peerText(records[j]);
     if (p) {
-      const l = launchLane(p);
+      const l = launchLane(p) || (isRelay(p) ? null : otherLane(p, name));
       if (l && l !== name) {
         end = j;
         break;

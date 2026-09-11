@@ -40,13 +40,13 @@ test('name is the basename between prompt- and .txt', () => {
   assert.equal(nameOf('prompt-.txt'), null);
 });
 
-test('a pasted prompt adopts; the writer, a cat, a notification, a peer, a skill expansion, a sidechain never do', () => {
+test('a pasted prompt adopts, from the user or a peer; the writer, a cat, a notification, a skill expansion, a sidechain never do', () => {
   assert.equal(findPrompt([human(PROMPT)], NAME), 0);
   assert.equal(findPrompt([user(PROMPT)], NAME), 0);
   assert.equal(findPrompt([write(PROMPT), assistant('written')], NAME), -1);
   assert.equal(findPrompt([toolResult(PROMPT)], NAME), -1);
   assert.equal(findPrompt([user(PROMPT, { origin: { kind: 'task-notification' } })], NAME), -1);
-  assert.equal(findPrompt([user(PROMPT, { origin: { kind: 'peer' } })], NAME), -1);
+  assert.equal(findPrompt([user(PROMPT, { origin: { kind: 'peer' } })], NAME), 0, 'a peer carrying the TASK line adopts like a typed message (F13)');
   assert.equal(findPrompt([user(PROMPT, { isMeta: true })], NAME), -1);
   assert.equal(findPrompt([user(PROMPT, { isSidechain: true })], NAME), -1);
 });
@@ -59,7 +59,7 @@ const peer = (body) => user(
   { isMeta: true, origin: { kind: 'peer', from: 'uds:/tmp/cc-socks/35179.sock', name: 'nightshift-f0', body } },
 );
 
-test('a peer message adopts through the argv launch line and nothing else; one for another lane ends the span', () => {
+test('a peer message adopts by the launch line, the TASK line, or the prompt file named and then read; a relay and other talk never do; one for another lane ends the span', () => {
   const launch = `claude -n ${NAME} "$(cat coordinator/prompt-${NAME}.txt)"`;
   assert.equal(launchLane(launch), NAME);
   assert.equal(findPrompt([peer(launch)], NAME), 0);
@@ -67,8 +67,13 @@ test('a peer message adopts through the argv launch line and nothing else; one f
   assert.equal(findPrompt([peer(`RUN, one prompt:\n  ${launch}\n`)], NAME), 0, 'inside the launch block');
   assert.equal(findPrompt([user(`x\n${launch}\n`, { isMeta: true, origin: { kind: 'peer' } })], NAME), 0, 'no origin.body: the wrapped text');
   assert.equal(findPrompt([peer(`TO ${NAME}\nRULED 02:19 by the user: build`)], NAME), -1, 'a relay is talk');
-  assert.equal(findPrompt([peer(PROMPT)], NAME), -1, 'the prompt text pasted by a peer');
-  assert.equal(findPrompt([peer(`follow prompt-${NAME}.txt`), toolResult(PROMPT)], NAME), -1, 'the file named without the launch line');
+  // Widened by F13: the user's ask of 2026-09-09 22:45, prompts injected into sessions they start.
+  assert.equal(findPrompt([peer(PROMPT)], NAME), 0, 'the prompt text sent by a peer carries the TASK line');
+  assert.equal(findPrompt([peer(`follow prompt-${NAME}.txt`), toolResult(PROMPT)], NAME), 0, 'the file named, then read');
+  assert.equal(findPrompt([peer(`follow prompt-${NAME}.txt`)], NAME), -1, 'named but never read');
+  assert.equal(findPrompt([peer(`TO ${NAME}\nthe prompt said:\n${PROMPT}`)], NAME), -1, 'a relay quoting the TASK line is talk');
+  assert.equal(findPrompt([peer(`TO ${NAME}\nsee prompt-${NAME}.txt`), toolResult(PROMPT)], NAME), -1, 'a relay naming the file is talk');
+  assert.equal(findPrompt([peer(`is ${NAME} done yet?`)], NAME), -1, 'a peer mentioning the lane adopts nothing');
   assert.equal(findPrompt([peer(`claude -n other "$(cat coordinator/prompt-${NAME}.txt)"`)], NAME), -1, 'the two names must agree');
   assert.equal(findPrompt([peer(`claude -n ${NAME} "$(cat coordinator/prompt-other.txt)"`)], NAME), -1);
   assert.equal(findPrompt([peer(launch), human(`TASK ${NAME}\nbody`)], NAME), 1, 'the last adopting record still wins');
@@ -77,6 +82,8 @@ test('a peer message adopts through the argv launch line and nothing else; one f
   assert.equal(analyze([human(PROMPT), closes], NAME).status, 'finished');
   assert.equal(analyze([human(PROMPT), peer(`claude -n other-lane "$(cat coordinator/prompt-other-lane.txt)"`), closes], NAME).status, 'in_progress', 'handed to another lane');
   assert.equal(analyze([human(PROMPT), peer(`TO ${NAME}\nbuild`), closes], NAME).status, 'finished', 'a relay does not end it');
+  assert.equal(analyze([human(PROMPT), peer('TASK other-lane\ndo the other thing'), closes], NAME).status, 'in_progress', 'a peer TASK line for another lane ends the span');
+  assert.equal(analyze([human(PROMPT), peer('TO other-lane\nsee prompt-x-lane.txt'), closes], NAME).status, 'finished', 'a relay to another lane does not end it');
 });
 
 test('a prompt pasted as a slash command argument adopts', () => {

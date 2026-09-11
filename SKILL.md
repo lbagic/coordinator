@@ -88,7 +88,8 @@ which hands the session its prompt as its first argument so nothing is pasted, t
 file by path under whatever skill the user chooses; you name none. `L launch` prints that
 block for every RUN row at once, grouped so each block's fences are disjoint, with the
 held ones under `HELD, not now:`. Sent to an already-open session with `SendMessage`, that
-same line starts the lane there and the tracker adopts it: it is the one peer message that
+same line starts the lane there and the tracker adopts it, as does a peer message carrying the
+prompt's TASK line or naming its file for the session to read; a `TO`-headed relay never
 adopts, so a lane needs nothing typed. The route a repo delivers by (worktree and PR, or
 commits on main) is a Fences line taken from `delivery` in goals.md, not a template edit.
 

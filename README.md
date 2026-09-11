@@ -23,8 +23,9 @@ comment block at the top of [lane.mjs](lane.mjs), pinned by the tests.
 - You launch each lane as its own Claude Code session with
   `claude -n <name> "$(cat coordinator/prompt-<name>.txt)"`. The tool finds the session from its
   transcript and reports it as live, stopped, stalled, finished, continued or exited.
-  Sending that same line to an open session with `SendMessage` adopts the lane there;
-  no other cross-session message does.
+  Sending that same line to an open session with `SendMessage` adopts the lane there, as
+  does sending the prompt's TASK line or its file name for the session to read; a
+  `TO`-headed relay never does.
 - Rulings travel to a worker by `lane.mjs relay`, then `SendMessage` to the session it
   names. Nothing is pasted by hand and the wording stays yours.
 - Items can name a PR or issue (`on: pr N`, `until: merged N`) and close themselves when
