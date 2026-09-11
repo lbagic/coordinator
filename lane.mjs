@@ -1392,6 +1392,12 @@ export const GOALS_TEMPLATE = [
   '',
 ].join('\n');
 
+// The end of a lane's last message on one line, for a row: the newest words.
+function tailText(tail) {
+  const said = (tail || '').replace(/\s+/g, ' ').trim();
+  return said.length > ASK_CHARS ? `…${said.slice(-ASK_CHARS)}` : said;
+}
+
 // An OK is fresh only when its time is the lane's latest event, so a lane
 // that moves after its OK is unverified again.
 export function okIsFresh(r, l, now = Date.now()) {
@@ -1530,6 +1536,7 @@ export function boardRows(results, store, opts = {}) {
       if (!verified(lane)) {
         if (!r || r.status === 'not_found') return `${lane} (${kind}) ${detail && blockers(lane).length ? `held: ${holdText(lane)}` : 'run it'}`;
         if (r.status === 'in_progress') return `${lane} (${kind}) live`;
+        if (r.status === 'stopped' && !r.asked) return `${lane} (${kind}) stopped, no question`;
         if (r.status === 'stopped' || r.status === 'stalled') return `${lane} (${kind}) answer it`;
         if (r.status === 'exited') return `${lane} (${kind}) exited, re-issue`;
         return `${lane} (${kind}) verify`;
@@ -1589,7 +1596,7 @@ export function boardRows(results, store, opts = {}) {
   for (const b of bad) out.push(row('BAD', b));
   out.push(...runnable);
   for (const r of results) {
-    if (r.status === 'stopped') out.push(row('ANSWER', r.name, peer(r), `asked: ${r.ask || ''}`));
+    if (r.status === 'stopped' && r.asked) out.push(row('ANSWER', r.name, peer(r), `asked: ${r.ask || ''}`));
     else if (r.status === 'stalled') out.push(row('ANSWER', r.name, peer(r), `idle ${fmtDur(now - r.mtime)}, no activity`));
     else if (r.status === 'continued' && r.session_open && r.asked && !verified(r.name)) out.push(row('ANSWER', r.name, peer(r), `after report: ${r.ask}`));
     else if (gated(r.name) && verified(r.name) && !buildSent(r.name)) out.push(row('ANSWER', r.name, peer(r), 'gated: waiting on your build word'));
@@ -1611,6 +1618,9 @@ export function boardRows(results, store, opts = {}) {
   const byItem = (id, text) => mine.push({ group: 0, at: id || 0, text });
   for (const r of results) {
     if (r.status === 'exited') byLane(r, row('MINE', r.name, 'exited without report, re-issue'));
+    // A lane that ended its turn on a statement asked the user nothing: reading
+    // it is the coordinator's act, never an ANSWER row.
+    else if (r.status === 'stopped' && !r.asked) byLane(r, row('MINE', r.name, 'stopped, no question: verify or re-issue', tailText(r.tail)));
     else if (r.status === 'finished' && !verified(r.name)) byLane(r, row('MINE', r.name, `verify report ${latest(r)}`));
     else if (r.status === 'continued' && !verified(r.name)) byLane(r, row('MINE', r.name, `re-verify ${latest(r)}`));
     else if (r.status === 'not_found' && blockers(r.name).length) byLane(r, row('MINE', r.name, `held: ${holdText(r.name)}`));

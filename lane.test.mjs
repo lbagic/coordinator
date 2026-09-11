@@ -561,6 +561,7 @@ test('the board: rows grouped by who acts, faults first, OK fresh only with the 
     lane('l', 'continued', { peer: 'repo-1f', session_open: true, closed_at: T('07:50'), moved_at: T('07:58'), ask: 'I also fixed lint.', asked: false, report: 'REPORT l' }),
     lane('m', 'finished', { peer: 'repo-4c', session_open: true, closed_at: T('07:59'), report: 'REPORT m' }),
     lane('n', 'continued', { peer: 'repo-6e', session_open: true, closed_at: T('07:50', '2026-09-04'), moved_at: T('07:57', '2026-09-04'), ask: 'Tag it too?', asked: true, report: 'REPORT n' }),
+    lane('o', 'stopped', { peer: 'repo-0d', session_open: true, stopped_at: T('06:10'), ask: 'Added to ~/.claude/CLAUDE.md the rule.', asked: false, tail: 'Suite running.\nAdded to ~/.claude/CLAUDE.md the rule.' }),
   ];
   const st = store(
     [
@@ -590,16 +591,20 @@ test('the board: rows grouped by who acts, faults first, OK fresh only with the 
     'MINE    g  verify report 07:40',
     'MINE    d  re-verify 07:30',
     'MINE    stale: OK d 07:10 abc',
+    'MINE    o  stopped, no question: verify or re-issue  Suite running. Added to ~/.claude/CLAUDE.md the rule.',
     'MINE    stale: OK e 07:00 abc',
     'MINE    i  held: #3',
     'MINE    #4  keep an eye on CI',
     'MINE    r14  write prompt after e  #2',
     'DONE    1 verified, 1 filed',
-    'CTX     coordinator 187K/1M  repo: 14 lanes  items 5',
+    'CTX     coordinator 187K/1M  repo: 15 lanes  items 5',
   ]);
   assert.deepEqual(rows([lane('a', 'not_found')], store([], 'RUN a build')), ['RUN     prompt-a.txt', 'CTX     coordinator ?  ?: 1 lane  items 0'], 'a RUN line from an older store is read and ignored');
   assert.equal(rows([lane('b', 'stopped', { session: null, ask: 'q?', asked: true })], store([]))[0], 'ANSWER  b  ?  asked: q?');
   assert.deepEqual(rows([results[3]], store([], 'OK d 07:30 abc')), ['CLOSE   d (repo-2a)', 'CTX     coordinator ?  ?: 1 lane  items 0']);
+  const ef = (name) => item('9-ef.md', `EFFORT ef the effort\nsize: S\npath: implement\nlanes: implement=${name}\n`);
+  assert.match(rows([results[14]], store([ef('o')])).find((r) => r.startsWith('EFFORT')), /o \(implement\) stopped, no question  #9$/, 'a statement is not a question to answer');
+  assert.match(rows([results[1]], store([ef('b')])).find((r) => r.startsWith('EFFORT')), /b \(implement\) answer it  #9$/);
 });
 
 test('MINE prints newest first, the newest three and one digest row of the rest by count; --all prints them whole; an unchanged board is no change', () => {
