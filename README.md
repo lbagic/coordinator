@@ -135,7 +135,9 @@ arrives.
 
 A headline or body with shell punctuation in it goes through files, never argv:
 `lane.mjs new STEP --head-file head.txt --body-file body.md`. A shell runs a backtick or
-`$(` inside a double-quoted argument before the tool sees it, so argv refuses both.
+`$(` inside a double-quoted argument before the tool sees it, so argv refuses both. A body
+comes from `--body-file`, `--body`, or stdin under `--stdin` only: a pipe nobody closes
+never blocks the tool.
 
 ## Layout
 

@@ -39,7 +39,7 @@ GitHub transitions only.
 Hold the ask against a `now` line in goals.md and say which. On a `never` line: refuse
 and name it. On an `ask` line, or no `now` line: a DECIDE first; a standing yes adds one
 line to goals.md, no dates, no ids. Already a lane, live or done: say so. Otherwise, the same turn: `L new EFFORT <name> <ask in the user's words>`
-(body on stdin), then the scout:
+(body via `--body-file FILE`, or `--stdin`), then the scout:
 
 ```
 Agent  subagent_type: scout  description: scout <name>  prompt: <what L scout <name> prints>
@@ -121,7 +121,7 @@ a merge or a CI state is claimed only with `gh` output in the same turn.
 ## The ledger
 
 `coordinator/` is the state; the rules are at the top of `lane.mjs`. `L new KIND [name]
-<headline>` (body on stdin), `L set <id|name> <key> <value>`, `L show <id|lane>`,
+<headline>` (body via `--body-file FILE`, or `--stdin`), `L set <id|name> <key> <value>`, `L show <id|lane>`,
 `L file <id>`. A headline or body carrying any punctuation a shell reads — a backtick,
 `$(`, a quote — is written with the Write tool and passed as `L new KIND [name]
 --head-file FILE --body-file FILE`: the shell never parses a file, and argv refuses a

@@ -27,8 +27,8 @@
 //                                                 one line per lane transition, Notification hook line and GitHub state change, runs until killed
 //   lane.mjs status <name> [--cwd DIR] [--json]   one-shot; exit 3 while the lane has no report
 //   lane.mjs show <id|lane> [--cwd DIR]           one item in full, or every open item naming a lane
-//   lane.mjs new KIND [name] <headline…> | --head-file FILE [--body-file FILE] [--after "a b"] [--blocks "x"] [--until "ok x"] [--on "issue N"] [--size S] [--path "…"] [--source S] [--body T]
-//                                                 a headline with punctuation goes in a file: argv refuses a backtick or $(
+//   lane.mjs new KIND [name] <headline…> | --head-file FILE [--body-file FILE] [--after "a b"] [--blocks "x"] [--until "ok x"] [--on "issue N"] [--size S] [--path "…"] [--source S] [--body T | --stdin]
+//                                                 a headline with punctuation goes in a file: argv refuses a backtick or $(; stdin is read only under --stdin or --body -
 //   lane.mjs file <id> [--cwd DIR]                move an item to coordinator/closed/
 //   lane.mjs ctx [--session ID]                   context of the calling session: `ctx 180K/1M`; silent, exit 0, until its transcript holds a usage record
 //   every command but ctx takes --cwd DIR (default: the current directory) and --store DIR (default: <cwd>/coordinator)
@@ -146,7 +146,6 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import tty from 'node:tty';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -2153,7 +2152,7 @@ function showCommand(args) {
 function newCommand(args) {
   const [, kindRaw, ...rest] = args._;
   const kind = (kindRaw || '').toUpperCase();
-  const usage = 'usage: lane.mjs new KIND [name] <headline…> | --head-file FILE [--body-file FILE] [--after "a b"] [--blocks "x y"] [--until "ok x"] [--on "issue N"] [--size S|M|L] [--path "research implement"] [--source S] [--body T] [--cwd DIR]';
+  const usage = 'usage: lane.mjs new KIND [name] <headline…> | --head-file FILE [--body-file FILE] [--after "a b"] [--blocks "x y"] [--until "ok x"] [--on "issue N"] [--size S|M|L] [--path "research implement"] [--source S] [--body T | --stdin] [--cwd DIR]';
   if (!KINDS.has(kind)) {
     console.error(`${usage}\nKIND is one of ${[...KINDS].join(' ')}`);
     return 1;
@@ -2197,8 +2196,11 @@ function newCommand(args) {
   }
   const header = [[kind, name, head].filter(Boolean).join(' ')];
   for (const k of ['after', 'blocks', 'until', 'source', 'size', 'path', 'on']) if (args[k]) header.push(`${k}: ${String(args[k]).trim()}`);
-  let body = fileBody != null ? fileBody : args.body || '';
-  if (!body && fileBody == null && !tty.isatty(0)) {
+  // stdin is read only when asked: under a tool-driven shell fd 0 is a pipe
+  // nobody closes, and reading it would block forever.
+  const fromStdin = !!args.stdin || args.body === '-';
+  let body = fileBody != null ? fileBody : fromStdin ? '' : args.body || '';
+  if (fromStdin) {
     try {
       body = fs.readFileSync(0, 'utf8');
     } catch (e) {
@@ -2692,7 +2694,7 @@ const USAGE = [
   '       lane.mjs watch [--cwd DIR] [--poll MS] [--notify FILE] [--gh-poll MS]',
   '       lane.mjs status <name> [--cwd DIR] [--json]        exit 3: the lane has no report yet',
   '       lane.mjs show <id|lane> [--cwd DIR]',
-  '       lane.mjs new KIND [name] <headline…> | --head-file FILE [--body-file FILE] [--after "a b"] [--blocks "x"] [--until "ok x"] [--on "issue N"] [--size S] [--path "…"] [--source S] [--body T]',
+  '       lane.mjs new KIND [name] <headline…> | --head-file FILE [--body-file FILE] [--after "a b"] [--blocks "x"] [--until "ok x"] [--on "issue N"] [--size S] [--path "…"] [--source S] [--body T | --stdin]',
   '       lane.mjs file <id> [--cwd DIR]',
   '       lane.mjs ctx [--session ID]                     prints nothing until the session has a transcript with usage',
   'every command but ctx takes --cwd DIR (default: the current directory) and --store DIR (default: <cwd>/coordinator)',

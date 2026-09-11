@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync, spawn } from 'node:child_process';
 import { exited, launchBlock, EXIT_GRACE_MS, promptField, promptFaults, buildPrompt, deltaLine, latestTime, GOALS_TEMPLATE, analyze, findPrompt, nameOf, ctxTokens, windowFromModel, modelFromArgv, argsRe, render, newer, parseBoardLines, parseItem, foldStore, readStore, boardRows, nextId, mintItem, slugOf, isCoordinatorSession, question, askLine, boardData, labelFaults, parseNotify, NotifyTail, renderNotify, parseGithub, githubLine, reportPr, effortFaults, parseFields, protocolOf, setHeaderKey, scoutPrompt, HOOK_JSON, githubRefs, syncGithub, whoRows, relayText, FIELD_MAX, LANE_KINDS, fenceTokens, fenceOverlap, launchLane, peerText, gateStop, handoffDue, HANDOFF_AT, isLive, okNames, liveRow, shorthandLine, worktreeFacts, resumeRows, lastReportSection, lastDatedLine, foldMine, MINE_KEEP, settle, activeAt } from './lane.mjs';
 
 process.env.TZ = 'UTC';
@@ -1267,6 +1267,32 @@ test('new takes the headline and the body from files the shell never parses, and
   assert.match(fails('new', 'STEP', 'x', '--head-file', 'head.txt'), /from --head-file or from argv, not both/);
   assert.match(fails('new', 'STEP', '--head-file', 'missing.txt'), /--head-file missing\.txt: ENOENT/);
   assert.equal(fs.readdirSync(dir).length, before, 'a refused headline writes nothing');
+  fs.rmSync(cwd, { recursive: true });
+});
+
+test('new never reads stdin unless asked: a pipe held open does not block it, and --stdin files the body the pipe carries', async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-stdin-'));
+  execFileSync(process.execPath, [path.join(HERE, 'lane.mjs'), 'init', '--cwd', cwd], { env: HERMETIC, stdio: 'ignore' });
+  const held = spawn(process.execPath, [path.join(HERE, 'lane.mjs'), 'new', 'STEP', 'press Stop', '--cwd', cwd], { env: HERMETIC, stdio: ['pipe', 'pipe', 'pipe'] });
+  let out = '';
+  held.stdout.on('data', (d) => (out += d));
+  const code = await new Promise((resolve) => {
+    const timer = setTimeout(() => resolve('blocked'), 5000);
+    held.on('exit', (c) => {
+      clearTimeout(timer);
+      resolve(c);
+    });
+  });
+  held.stdin.end();
+  if (code === 'blocked') held.kill();
+  assert.equal(code, 0, 'the process exits with stdin still open');
+  assert.equal(out.trim(), 'coordinator/1-press-stop.md');
+  assert.equal(fs.readFileSync(path.join(cwd, 'coordinator', '1-press-stop.md'), 'utf8'), 'STEP press Stop\n');
+  const piped = spawnSync(process.execPath, [path.join(HERE, 'lane.mjs'), 'new', 'NOTE', 'from the pipe', '--stdin', '--cwd', cwd], { env: HERMETIC, input: 'the body\nsecond line\n', encoding: 'utf8' });
+  assert.equal(piped.status, 0, piped.stderr);
+  assert.equal(fs.readFileSync(path.join(cwd, 'coordinator', '2-from-the-pipe.md'), 'utf8'), 'NOTE from the pipe\n\nthe body\nsecond line\n');
+  const dash = spawnSync(process.execPath, [path.join(HERE, 'lane.mjs'), 'new', 'NOTE', 'dash', '--body', '-', '--cwd', cwd], { env: HERMETIC, input: 'dash body\n', encoding: 'utf8' });
+  assert.equal(fs.readFileSync(path.join(cwd, 'coordinator', '3-dash.md'), 'utf8'), 'NOTE dash\n\ndash body\n', dash.stderr);
   fs.rmSync(cwd, { recursive: true });
 });
 
