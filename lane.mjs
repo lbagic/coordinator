@@ -1209,13 +1209,20 @@ export function reportPr(report) {
   return n ? Number(n[1] || n[2]) : null;
 }
 
-// A gated implement lane stops at its gate with the Gate sentence as the last
-// line of its report: it has done its recon and waits for the user's build
-// word. Such a lane is never a session to close, however it was verified.
+// A gated implement lane stops at its gate with the Gate sentence in the
+// closing region of its report: it has done its recon and waits for the user's
+// build word. Such a lane is never a session to close, however it was
+// verified. The region is the last GATE_REGION non-empty lines joined with
+// spaces, so a sentence wrapped over two lines or followed by a postscript
+// still reads; it must open a line with `Gated` and name build before its
+// next full stop, so a quote higher in the body or a later `build` does not.
+export const GATE_REGION = 5;
 export function gateStop(report) {
-  const lines = String(report || '').trim().split('\n');
-  const last = (lines[lines.length - 1] || '').trim();
-  return /^Gated\b/i.test(last) && /\bbuild\b/i.test(last);
+  const lines = String(report || '').split('\n').map((l) => l.trim()).filter(Boolean).slice(-GATE_REGION);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (/^Gated\b/i.test(lines[i])) return /^Gated\b\.?\s*[^.]*\bbuild\b/i.test(lines.slice(i).join(' '));
+  }
+  return false;
 }
 
 // Faults in the fields of a prompt to be written: itemIds are the ids in the

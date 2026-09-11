@@ -684,7 +684,11 @@ test("a lane stopped at its gate waits on the user's build word: never a session
   const BUILT = 'REPORT cell\nwhat: built\ncommits: abc123 feat(cell): the cell\nopen: none';
   assert.equal(gateStop(GATE), true);
   assert.equal(gateStop(BUILT), false);
-  assert.equal(gateStop(`${GATE}\nopen: none`), false, 'the Gate sentence is the last line or the lane moved on');
+  assert.equal(gateStop(`${GATE}\nopen: none`), true, 'a postscript after the Gate sentence does not hide it');
+  assert.equal(gateStop('REPORT cell\nwhat: recon\n\nGated. Waiting for a message headed TO cell carrying\nthe word build.'), true, 'a Gate sentence wrapped over two lines reads');
+  const quoted = ['REPORT cell', 'what: the template ends a report with', 'Gated. Waiting for a message headed TO cell carrying the word build.', ...Array.from({ length: 20 }, (_, i) => `line ${i}`), 'open: none'].join('\n');
+  assert.equal(gateStop(quoted), false, 'the sentence quoted twenty lines above the end is not a gate stop');
+  assert.equal(gateStop('REPORT cell\nGated. Waiting for the word.\nP.S. the build passed.'), false, 'build must be in the Gate sentence, not after it');
   assert.equal(gateStop('Gated. Waiting for the word.'), false, 'the sentence names the word build');
   const ef = item('1-cells.md', 'EFFORT cells the cells\nsize: M\npath: implement\nlanes: implement=cell\non: issue 9\n');
   const at = (report, closed) => [lane('cell', 'finished', { closed_at: T(closed), report, session_open: true })];
