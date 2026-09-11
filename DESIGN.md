@@ -194,7 +194,8 @@ Pointers token naming an item id are still refused.
 - `new KIND [name] --head-file FILE [--body-file FILE]`: the headline is the file's first line and the body the other file's text, so neither passes through a shell; an argv headline carrying a backtick or `$(` is refused
 - `set <id|name> <key> <value>`: rewrite one header key of an item
 - `sync`: refresh `github.txt` from GitHub and print what changed
-- `who [<lane>]`: session name, tty, status, idle, cwd per launched lane
+- `who [<lane>] [--all]`: session name, tty, status, idle, cwd per lane that holds something
+- `resume`: per live lane its worktree (the session's cwd), uncommitted files, commits ahead of the base and report tail; per open STEP and DECIDE its last dated line; a git read that fails prints `(unreadable)`
 - `relay <lane> <text…>`: append `SENT`, print the addressed message and the session to send it to
 - `did <effort> <what…>`: append `DID`
 - `scout <effort>`: print the scout prompt for the Agent call

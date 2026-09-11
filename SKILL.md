@@ -19,7 +19,9 @@ your context is for the whole project, not one lane's files. `L` below is
 `node ${CLAUDE_SKILL_DIR}/lane.mjs init` first (idempotent: the store, the goals skeleton,
 the git excludes). Its last line is `L() { node '<absolute path>/lane.mjs' "$@"; }`: a
 function dies with its shell call, so every later call that runs `L` starts with that
-line and a `;`. Then `L delta`,
+line and a `;`. A restarted session runs `L resume` next: in one call, per live lane its
+worktree, uncommitted files, commits and report tail, and per open STEP and DECIDE its
+last dated line, so nothing is re-derived by hand. Then `L delta`,
 then read `coordinator/goals.md` and, if it exists, `coordinator/handoff.md`. A goals.md
 still holding the skeleton's placeholders: ask the user for the goals before anything else.
 Arm the watch once (it dies with the session; a resumed coordinator arms it again):

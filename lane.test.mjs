@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { exited, launchBlock, EXIT_GRACE_MS, promptField, promptFaults, buildPrompt, deltaLine, latestTime, GOALS_TEMPLATE, analyze, findPrompt, nameOf, ctxTokens, windowFromModel, modelFromArgv, argsRe, render, newer, parseBoardLines, parseItem, foldStore, readStore, boardRows, nextId, mintItem, slugOf, isCoordinatorSession, question, askLine, boardData, labelFaults, parseNotify, NotifyTail, renderNotify, parseGithub, githubLine, reportPr, effortFaults, parseFields, protocolOf, setHeaderKey, scoutPrompt, HOOK_JSON, githubRefs, syncGithub, whoRows, relayText, FIELD_MAX, LANE_KINDS, fenceTokens, fenceOverlap, launchLane, peerText, gateStop, handoffDue, HANDOFF_AT, isLive, okNames, liveRow, shorthandLine } from './lane.mjs';
+import { exited, launchBlock, EXIT_GRACE_MS, promptField, promptFaults, buildPrompt, deltaLine, latestTime, GOALS_TEMPLATE, analyze, findPrompt, nameOf, ctxTokens, windowFromModel, modelFromArgv, argsRe, render, newer, parseBoardLines, parseItem, foldStore, readStore, boardRows, nextId, mintItem, slugOf, isCoordinatorSession, question, askLine, boardData, labelFaults, parseNotify, NotifyTail, renderNotify, parseGithub, githubLine, reportPr, effortFaults, parseFields, protocolOf, setHeaderKey, scoutPrompt, HOOK_JSON, githubRefs, syncGithub, whoRows, relayText, FIELD_MAX, LANE_KINDS, fenceTokens, fenceOverlap, launchLane, peerText, gateStop, handoffDue, HANDOFF_AT, isLive, okNames, liveRow, shorthandLine, worktreeFacts, resumeRows, lastReportSection, lastDatedLine } from './lane.mjs';
 
 process.env.TZ = 'UTC';
 
@@ -772,6 +772,45 @@ test('the fixture ledger has no faults and renders in 20 rows; the bad fixture h
   assert.equal(good.at(-1), 'CTX     coordinator 66K/1M  nightshift: 2 lanes  items 16');
   const bad = rows(FIXTURE_LANES, readStore(path.join(HERE, 'fixtures', 'store-bad'), path.join(HERE, 'fixtures', 'store-bad', 'coordinator'))).filter((r) => r.startsWith('BAD'));
   for (const re of [/lanes\.txt: 'HOLD old-lane/, /#1 open and closed/, /#1 names unknown lane 'docs-apply-r51'/, /#21 header line not a known key/, /#21 until:/, /#24 kind TODO unknown/, /#25 no headline/, /dup id 6/, /cycle: a-lane -> b-lane -> a-lane/, /github\.txt: 'pr 12 DONE'/, /#26 size: 'XL'/, /#26 path names 'build'/, /#26 lanes: 'implement-x'/, /#26 on: 'ticket 5'/, /#26 lanes: prototype is not on the path/, /#26 names unknown lane 'nothing-here'/, /#27 size: only an EFFORT carries it/]) assert.ok(bad.some((r) => re.test(r)), String(re));
+});
+
+test('resume: per live lane its status, worktree, uncommitted files, commits ahead and report tail, per open STEP its last dated line, in one call; a git read that fails is (unreadable)', () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-resume-'));
+  const git = (...a) => execFileSync('git', ['-C', repo, '-c', 'user.name=t', '-c', 'user.email=t@t', ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  git('init', '-q', '-b', 'main');
+  fs.writeFileSync(path.join(repo, 'a.txt'), 'a\n');
+  git('add', 'a.txt');
+  git('commit', '-q', '-m', 'base');
+  git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+  fs.writeFileSync(path.join(repo, 'b.txt'), 'b\n');
+  git('add', 'b.txt');
+  git('commit', '-q', '-m', 'the lane commit');
+  fs.writeFileSync(path.join(repo, 'wip.ts'), 'x\n');
+  const live = [lane('grid', 'in_progress', { peer: 'repo-9f', cwd: repo, report: 'REPORT grid\nwhat: built\nopen: the flaky pool test\n  under load' })];
+  const st = store([item('198-deploy.md', 'STEP deploy first\n\nwhy: the tip is ahead\nUPDATE 2026-09-11 09:05 deploy before the restart\nnot dated\n'), item('2-n.md', 'NOTE not shown\n')]);
+  const steps = st.items.filter((i) => i.kind === 'STEP');
+  const out = resumeRows(live, steps, (r) => worktreeFacts(r.cwd));
+  assert.deepEqual(out, [
+    `LIVE    grid  in_progress  repo-9f  ${fs.realpathSync(repo)}`,
+    '  uncommitted: wip.ts',
+    `  ahead of origin/main: ${git('rev-parse', '--short', 'HEAD').trim()} the lane commit`,
+    '  report: open: the flaky pool test under load',
+    'STEP    #198  deploy first  last: UPDATE 2026-09-11 09:05 deploy before the restart',
+  ]);
+  const broken = resumeRows(live, steps, (r) => worktreeFacts(r.cwd, () => {
+    throw new Error('git: not found');
+  }));
+  assert.deepEqual(broken.slice(0, 3), [`LIVE    grid  in_progress  repo-9f  ${repo}`, '  uncommitted: (unreadable)', '  ahead of the base: (unreadable)'], 'a failing git degrades to a row');
+  assert.deepEqual(resumeRows([], [], () => ({})), ['nothing live, no open STEP or DECIDE']);
+  assert.equal(lastReportSection('REPORT x\nwhat: y\n'), 'what: y');
+  assert.equal(lastDatedLine('no dates here'), null);
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-resume-cli-'));
+  fs.mkdirSync(path.join(cwd, 'coordinator'));
+  fs.writeFileSync(path.join(cwd, 'coordinator', '198-deploy.md'), 'STEP deploy first\n\nUPDATE 2026-09-11 09:05 deploy before the restart\n');
+  const cli = spawnSync(process.execPath, [path.join(HERE, 'lane.mjs'), 'resume', '--cwd', cwd], { encoding: 'utf8', env: HERMETIC });
+  assert.deepEqual([cli.status, cli.stdout.trim()], [0, 'STEP    #198  deploy first  last: UPDATE 2026-09-11 09:05 deploy before the restart']);
+  fs.rmSync(repo, { recursive: true });
+  fs.rmSync(cwd, { recursive: true });
 });
 
 test('new mints max+1 across open and closed, refuses an existing filename, and steps past a twin id', () => {

@@ -17,6 +17,7 @@
 //   lane.mjs scout <effort> [--cwd DIR]           print the scout prompt for an EFFORT item
 //   lane.mjs delta [--cwd DIR]                    rewrite coordinator/board.txt, print BAD rows and one line of what changed
 //   lane.mjs board [--cwd DIR] [--json]           every row, grouped by who acts, CTX last
+//   lane.mjs resume [--cwd DIR]                   after a restart: per live lane its worktree, uncommitted files, commits and report tail; per open STEP and DECIDE its last dated line
 //   lane.mjs check [--cwd DIR]                    the BAD rows only; exit 1 when there are any
 //   lane.mjs live [--all] [--cwd DIR]             every lane that holds something with the Fences line of its prompt, capped; --all: every launched lane
 //   lane.mjs launch [--cwd DIR]                   the launch block: RUN prompts as `claude -n` lines grouped by disjoint fences, held ones under HELD
@@ -770,6 +771,16 @@ export class Lanes {
   coordinatorCtxTokens() {
     const t = this.coordinatorTranscript();
     return t ? ctxTokens(t.records) : null;
+  }
+
+  // The directory a lane's session sits in: the registry entry's cwd while the
+  // session lives, the last transcript record's `cwd` after it dies.
+  sessionCwd(r, registry = readRegistry()) {
+    const entry = r.session ? registry.find((e) => e.sessionId === r.session) : null;
+    if (entry && entry.cwd) return entry.cwd;
+    const t = r.file ? this.transcripts.read(r.file) : null;
+    for (let j = t ? t.records.length - 1 : -1; j >= 0; j--) if (t.records[j].cwd) return t.records[j].cwd;
+    return null;
   }
 
   coordinatorTranscript() {
@@ -1709,7 +1720,7 @@ export function boardData(args) {
     } catch {}
   }
   const rows = boardRows(results, store, { ctx: lanes.coordinatorCtx(), ctxTokens: lanes.coordinatorCtxTokens(), prompts, repo: path.basename(lanes.cwd), coordinators: lanes.coordinators(registry, trees), watches: watchCount() });
-  return { rows, results, store, prompts };
+  return { rows, results, store, prompts, lanes, registry };
 }
 
 // The numbers the ledger names: `on:` and `until:` of open items, and the
@@ -1794,6 +1805,72 @@ function syncCommand(args) {
     console.error(`sync: gh failed for ${failed.map((n) => `#${n}`).join(' ')}: ${reason}`);
     return 1;
   }
+  return 0;
+}
+
+function gitRun(cmd, argv) {
+  return execFileSync(cmd, argv, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+}
+
+// What a worktree holds, read with `run` (execFileSync-shaped): its top level,
+// the uncommitted files, and the commits not on the base ref. A read that fails
+// is null, printed as (unreadable), never an exception.
+export function worktreeFacts(cwd, run = gitRun) {
+  const read = (argv) => {
+    if (!cwd) return null;
+    try {
+      return run('git', ['-C', cwd, ...argv]);
+    } catch {
+      return null;
+    }
+  };
+  const top = read(['rev-parse', '--show-toplevel']);
+  const status = top == null ? null : read(['status', '--porcelain']);
+  const base = top == null ? null : ['origin/HEAD', 'origin/main', 'main'].find((ref) => read(['rev-parse', '--verify', '--quiet', ref]) != null) || null;
+  const log = base ? read(['log', '--format=%h %s', `${base}..HEAD`]) : null;
+  const lines = (s) => (s == null ? null : s.split('\n').filter((l) => l.trim()));
+  return { worktree: top == null ? cwd || null : top.trim(), base, dirty: status == null ? null : lines(status).map((l) => l.slice(3)), ahead: lines(log) };
+}
+
+// The last `key:` field of a REPORT block with its continuation lines.
+export function lastReportSection(report) {
+  const lines = (report || '').split('\n');
+  let i = lines.length - 1;
+  while (i >= 0 && !/^[a-z]+:/.test(lines[i])) i--;
+  return i < 0 ? null : capTo(lines.slice(i).map((l) => l.trim()).filter(Boolean).join(' '), TAIL_CHARS);
+}
+
+// The last body line of an item that carries a date.
+export function lastDatedLine(body) {
+  const dated = (body || '').split('\n').filter((l) => /\d{4}-\d\d-\d\d/.test(l));
+  return dated.length ? capHead(dated[dated.length - 1].trim()) : null;
+}
+
+// The resume view: per live lane its status, session, worktree, uncommitted
+// files, commits ahead of the base and its report's last section; per open
+// STEP or DECIDE its headline and its last dated body line. factsOf(r) is
+// worktreeFacts for the lane's session directory. Pure but for factsOf.
+export function resumeRows(live, items, factsOf) {
+  const out = [];
+  const listed = (xs, sep) => (xs == null ? '(unreadable)' : xs.length ? xs.join(sep) : 'none');
+  for (const r of live) {
+    const f = factsOf(r);
+    out.push(`LIVE    ${r.name}  ${r.status}  ${r.peer || (r.session || '?').slice(0, 8)}  ${f.worktree || '(unreadable)'}`);
+    out.push(`  uncommitted: ${listed(f.dirty, ' ')}`);
+    out.push(`  ahead of ${f.base || 'the base'}: ${listed(f.ahead, '; ')}`);
+    out.push(`  report: ${lastReportSection(r.report) || 'none yet'}`);
+  }
+  for (const it of items) out.push(`${it.kind.padEnd(6)}  #${it.id}  ${capHead(it.head)}  last: ${lastDatedLine(it.body) || 'no dated line'}`);
+  return out.length ? out : ['nothing live, no open STEP or DECIDE'];
+}
+
+function resumeCommand(args) {
+  const { rows, results, store, lanes, registry } = boardData(args);
+  const ok = okNames(store);
+  const live = results.filter((r) => isLive(r, ok)).map((r) => ({ ...r, cwd: lanes.sessionCwd(r, registry) }));
+  const onBoard = new Set(rows.map((r) => /^(?:STEP|DECIDE)\s+#(\d+)/.exec(r)).filter(Boolean).map((m) => Number(m[1])));
+  const items = store.items.filter((i) => (i.kind === 'STEP' || i.kind === 'DECIDE') && onBoard.has(i.id));
+  console.log(resumeRows(live, items, (r) => worktreeFacts(r.cwd)).join('\n'));
   return 0;
 }
 
@@ -2513,6 +2590,7 @@ const USAGE = [
   '       lane.mjs scout <effort> [--cwd DIR]',
   '       lane.mjs delta [--cwd DIR]',
   '       lane.mjs board [--cwd DIR] [--json]',
+  '       lane.mjs resume [--cwd DIR]',
   '       lane.mjs check [--cwd DIR]',
   '       lane.mjs live [--all] [--cwd DIR]',
   '       lane.mjs launch [--cwd DIR]',
@@ -2575,6 +2653,8 @@ async function main() {
       return watchCommand(args);
     case 'board':
       return boardCommand(args);
+    case 'resume':
+      return resumeCommand(args);
     case 'check':
       return checkCommand(args);
     case 'status':
