@@ -1269,28 +1269,42 @@ const NEAR_LABELS = new Map([['ask', 'Ask'], ['why', 'Why now'], ['done', 'Done 
 export function labelFaults(text) {
   const out = [];
   for (const raw of String(text || '').split('\n')) {
-    const m = /^([A-Za-z]+(?: [A-Za-z]+)?):/.exec(raw);
-    if (!m) continue;
-    const want = NEAR_LABELS.get(m[1].split(' ')[0].toLowerCase());
-    if (want && m[1].toLowerCase() !== want.toLowerCase()) out.push(`--from: '${m[1]}:' is not '${want}:'`);
+    const h = /^(#{1,6})\s+([A-Za-z]+(?: [A-Za-z]+)?):?\s*$/.exec(raw);
+    const m = h ? null : /^([A-Za-z]+(?: [A-Za-z]+)?):/.exec(raw);
+    const said = h ? h[2] : m ? m[1] : null;
+    if (!said) continue;
+    const want = NEAR_LABELS.get(said.split(' ')[0].toLowerCase());
+    if (!want || said.toLowerCase() === want.toLowerCase()) continue;
+    out.push(h ? `--from: '${h[1]} ${said}' is not '${h[1]} ${want}'` : `--from: '${said}:' is not '${want}:'`);
   }
   return out;
 }
 
+// A field starts at a `Label: text` line or at a Markdown heading naming the
+// label (`## Ask`, `### Done when:`); following lines continue it to a blank
+// line. Under a heading the blank lines before its first text do not end it.
 export function parseFields(text) {
   const labels = new Map(PROMPT_FIELDS.map(([key, label]) => [label.toLowerCase(), key]));
   const fields = {};
   let cur = null;
+  let heading = false;
   for (const raw of String(text || '').split('\n')) {
-    const m = /^([A-Za-z ]+):\s*(.*)$/.exec(raw);
-    const key = m ? labels.get(m[1].trim().toLowerCase()) : null;
+    const h = /^#{1,6}\s+([A-Za-z ]+?):?\s*$/.exec(raw);
+    const m = h ? null : /^([A-Za-z ]+):\s*(.*)$/.exec(raw);
+    const key = h ? labels.get(h[1].trim().toLowerCase()) : m ? labels.get(m[1].trim().toLowerCase()) : null;
     if (key) {
       cur = key;
-      fields[key] = m[2].trim();
+      heading = !!h;
+      fields[key] = h ? '' : m[2].trim();
+      continue;
+    }
+    if (h || /^#{1,6}\s/.test(raw)) {
+      cur = null;
       continue;
     }
     if (!cur) continue;
     if (!raw.trim()) {
+      if (heading && !fields[cur]) continue;
       cur = null;
       continue;
     }
@@ -2410,6 +2424,11 @@ function promptCommand(args) {
     }
   }
   const fromFile = parseFields(fromText);
+  if (args.from && !Object.keys(fromFile).length && !labelFaults(fromText).length) {
+    const first = (fromText.split('\n').find((l) => l.trim()) || '(an empty file)').trim();
+    console.error(`prompt: --from ${args.from} holds no field: its first line is '${capTo(first, 60)}', where a field was expected as 'Ask: …' or '## Ask'`);
+    return 1;
+  }
   const fields = Object.fromEntries(PROMPT_FIELDS.map(([k]) => [k, String(args[k] || fromFile[k] || '').replace(/\s*\n\s*/g, ' ').trim()]));
   const opts = { kind: args.kind || '', gate: !!args.gate, runner: !!args.runner, force: !!args.force, effort: args.effort || null, ticket: null };
   const ids = new Set();

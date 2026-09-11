@@ -71,7 +71,8 @@ L prompt <name> --kind <research|scoping|prototype|implement|alternative|review|
 
 Five fields, one paragraph each, at most 2000 characters (Ask, Why now, Done when,
 Fences, Pointers; Ask, Done when and Fences never empty); write the draft with the Write tool
-as `coordinator/draft-<name>.md` and hand it over with `--from`.
+as `coordinator/draft-<name>.md` and hand it over with `--from`; a field starts at a `Label:`
+line or a `## Label` heading.
 The kind adds its protocol, the address rule and the REPORT keys; the command refuses a
 citation, an item id in Pointers, a reused name, a kind off the effort's path, a gate on
 an S effort, an M implement without one. Ask and Done when in the user's words (their

@@ -319,6 +319,7 @@ test('github.txt is one line per number, pr|issue <n> STATE [time] [title]; a li
 test('a draft label that starts like one of the five but is not it is refused, so no text folds into the field above', () => {
   assert.deepEqual(labelFaults('# draft\n\nAsk: a\nWhy: b\nDone when: c\nFence: d\nPointer: e\n'), ["--from: 'Why:' is not 'Why now:'", "--from: 'Fence:' is not 'Fences:'", "--from: 'Pointer:' is not 'Pointers:'"]);
   assert.deepEqual(labelFaults('Ask: a\nWhy now: b\nDone when: c\nFences: d\nPointers: e\nNote: fine\nAsk the team: not a label\n'), []);
+  assert.deepEqual(labelFaults('## Ask\na\n## Why\nb\n### Done\nc\n## Fences\nd\n## Notes\n## Ask the team\n'), ["--from: '## Why' is not '## Why now'", "--from: '### Done' is not '### Done when'"], 'the heading spelling of a near miss is refused too');
 });
 
 test('the pr: line of a report names the PR by url or number, or none', () => {
@@ -462,6 +463,19 @@ test('fields read from a draft file: a label starts a field, following lines con
   assert.deepEqual(f, { ask: 'do the thing across two lines', why: 'because', done: 'it is done', fences: 'web/ only', pointers: '#1' });
   assert.deepEqual(parseFields('done when: lower case label works\n'), { done: 'lower case label works' });
   assert.deepEqual(parseFields('Nope: not a field\n'), {});
+  const headings = parseFields('# draft\n\n## Ask\n\ndo the thing\n  across two lines\n\n## Why now:\nbecause\n\n### Done when\nit is done\n\n## Fences\n\nweb/ only\n\n## Pointers\n#1\n\n## Notes\ntrailing notes\n');
+  assert.deepEqual(headings, f, 'a headings draft parses to the same five fields as the label draft');
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'lane-from-'));
+  fs.mkdirSync(path.join(cwd, 'coordinator'));
+  fs.writeFileSync(path.join(cwd, 'draft.md'), 'Lane cells-render\n\nThe ask: render the cells\n');
+  const refused = spawnSync(process.execPath, [path.join(HERE, 'lane.mjs'), 'prompt', 'cells', '--kind', 'implement', '--from', 'draft.md', '--cwd', cwd], { encoding: 'utf8', env: HERMETIC });
+  assert.equal(refused.status, 1);
+  assert.equal(refused.stderr.trim(), "prompt: --from draft.md holds no field: its first line is 'Lane cells-render', where a field was expected as 'Ask: …' or '## Ask'", 'one refusal naming the shape, not three empty fields');
+  fs.writeFileSync(path.join(cwd, 'draft.md'), '## Ask\nrender the cells\n\n## Done when\nthe grid shows them\n\n## Fences\nweb/ only\n');
+  const ok = spawnSync(process.execPath, [path.join(HERE, 'lane.mjs'), 'prompt', 'cells', '--kind', 'implement', '--from', 'draft.md', '--cwd', cwd], { encoding: 'utf8', env: HERMETIC });
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.equal(promptField(fs.readFileSync(path.join(cwd, 'coordinator', 'prompt-cells.txt'), 'utf8'), 'Done when'), 'the grid shows them');
+  fs.rmSync(cwd, { recursive: true });
 });
 
 test('setHeaderKey replaces a key in the header or adds it before the first blank line; the body is untouched', () => {
